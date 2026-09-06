@@ -1,0 +1,20 @@
+# agent 镜像构建上下文排除（build context 为仓库根）
+.git
+.gitignore
+.venv
+**/__pycache__
+**/*.pyc
+*.pyo
+.pw-browsers
+node_modules
+logs/*
+state/*
+state
+tests
+repo_analysis
+docs
+.codebuddy
+generated-images
+*.md
+.env
+.cache

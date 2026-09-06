@@ -1,0 +1,32 @@
+# ============================================================================
+# 定时任务示例配置（复制为 config/tasks.yaml 后按需修改，调度器 30 秒内热加载）
+#   cp config/tasks.example.yaml config/tasks.yaml
+# 也可以在 WebUI「任务调度」页创建/管理任务，同样落到这份文件。
+# 首次使用请务必：先编辑任务里的 accounts/平台，并在 WebUI 登录好账号再启用！
+# ============================================================================
+tasks:
+  # 每日自动发帖示例 —— 默认停用，改好账号与文案再打开
+  daily_post:
+    enabled: false            # 改好配置后再置为 true
+    cron: 0 9 * * *           # 每天 09:00
+    platforms:
+    - xiaohongshu             # 支持的平台见 docs/API.md / WebUI
+    - douyin
+    drafts: 3                 # 先生成几篇备选文案，取最优发布
+    visibility: private
+    mode: slideshow           # image: 单图文 | slideshow: 多图+文字+可选BGM合成视频
+    image_count: 4
+    accounts:
+      xiaohongshu: []         # 填你在 WebUI「账号矩阵」里建的账号名，例如 [主号]
+      douyin: []
+
+  # 流量维护（自动回复评论）示例 —— 默认停用，填好作品链接再打开
+  maintain_traffic:
+    enabled: false            # 改好配置后再置为 true
+    cron: '*/30 8-23 * * *'   # 每 30 分钟巡检一次
+    max_replies: 10           # 每个作品本次最多回复多少条
+    notes:                    # 要巡检并回复的作品，格式：平台 链接 [主题]
+    - platform: xiaohongshu
+      url: https://www.xiaohongshu.com/explore/你的笔记ID
+    - platform: douyin
+      url: https://www.douyin.com/video/你的视频ID

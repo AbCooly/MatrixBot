@@ -1,0 +1,57 @@
+# ============================================================================
+# MatrixBot .gitignore —— 开源发布安全边界
+# 原则：凭据 / 登录态 / 日志 / 本地调试产物 一律不入库。
+# ============================================================================
+
+# ---- 凭据：任意层级的 .env 都不提交，只保留模板 ----
+.env
+**/.env
+.env.example
+!docker/.env.example
+
+# ---- 运行时状态（账号 Cookie / 浏览器登录态 / VNC 密码 / 回复去重）----
+state/
+logs/
+*.pem
+*.key
+*.p12
+*.pfx
+
+# ---- IDE / AI 助手 ----
+.idea/
+*.iml
+.vscode/
+.trae/
+.codebuddy/
+
+# ---- 浏览器内核（本地运行时才出现，体积大不入库）----
+.pw-browsers/
+
+# ---- Python ----
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.venv-win/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# ---- 运行时生成 / 用户上传产物（含版权内容不入库）----
+assets/generated/
+assets/music/*.mp3
+assets/music/*.m4a
+assets/music/*.wav
+assets/music/*.aac
+
+# ---- 本地调试脚本、旧版本地启动器、运行配置（含账号/cron）----
+scripts/
+repo_analysis/
+config/tasks.yaml
+start.sh
+
+# ---- 日志与启动器状态 ----
+*.log
+*.err
+.deps_ok
+.agent.pid

@@ -1,0 +1,140 @@
+# =============================================================================
+# 社交媒体全自动运营系统 —— 容器化部署（Docker Compose）
+#
+# 架构：
+#   browser-gui   —— 虚拟桌面 + 每账号独立有头 Chromium（CDP）+ x11vnc + noVNC
+#                    账号浏览器守护 API :9100（agent 内部调用，无需对外）
+#                    网页远程桌面      :6080（WebUI「远程桌面 · 人工接管」）
+#   agent         —— WebUI 多账号运营面板（:8080），通过 BROWSER_MGR_URL 连 browser-gui
+#   scheduler     ——（可选，docker compose --profile scheduler up）常驻定时调度
+#
+# 内存模型（省内存的关键设计）：
+#   每个有头 Chromium 常驻约 450-500MB，守护进程默认「严格串行」：
+#   同一时刻最多 BROWSER_MAX_INSTANCES（默认 1）个浏览器存活；任务按平台顺序执行时
+#   自动切换实例（登录态落盘，切回自动恢复）；无人使用超 BROWSER_IDLE_TTL 秒自动
+#   回收；「远程桌面接管」中的账号窗口被 pin 保留 BROWSER_PIN_TTL 秒不被淘汰。
+#   WebUI 登录态检测在容器化模式下走后台串行队列，与任务/发布错峰，不会多开浏览器。
+#
+# 用法：
+#   cd docker && cp .env.example .env && docker compose up -d --build
+#   打开 http://<宿主IP>:8080 （WebUI） / http://<宿主IP>:6080/vnc.html（noVNC）
+#
+# 安全默认（0 配置裸启也不会裸奔，云端部署强烈建议再套 HTTPS）：
+#   a) WebUI（:8080）已内置登录鉴权：.env 配 WEBUI_USERNAME/WEBUI_PASSWORD；
+#      两者都没配则首次启动自动生成随机密码并打印到容器日志（登录后可在
+#      「设置 → 账号安全」改密，凭据只存 HMAC 摘要，落盘 state/.webui-auth.json）
+#   b) browser-gui 守护 API 默认只绑 127.0.0.1:9100，并可配 GUARDIAN_TOKEN
+#      （agent/scheduler 通过 X-Guardian-Token 自动携带），同网络栈内鉴权
+#   c) noVNC（:6080）连接仍需 VNC 密码；VNC 原生端口（5900）默认只绑宿主回环
+#      （VNC_BIND_IP=0.0.0.0 才会对外暴露）；VNC_PASSWORD 留空则自动随机生成
+#   d) 公网部署建议：Caddy/Nginx 反代 8080 提供 HTTPS，并设 WEBUI_COOKIE_SECURE=true
+#
+# 注意：
+#   1. 首次启动：WebUI 登录 →「设置 → 远程桌面密码」查看/修改 noVNC 密码
+#      （修改后立即生效且容器重启保留；.env 的 VNC_PASSWORD 仅在首次/无保存时使用）
+#   2. 登录被滑块/扫码卡住时：账号矩阵点「未登录 · 去远程登录」→ 自动打开该账号
+#      浏览器窗口并新标签打开全屏远程桌面，在真实窗口里拖滑块/扫码，完成后回 WebUI
+#      点「⟳ 立即检测」刷新登录状态
+# =============================================================================
+name: newpj
+
+services:
+  browser-gui:
+    build:
+      context: ./browser-gui
+    image: newpj/browser-gui:local
+    restart: unless-stopped
+    shm_size: "1g"          # Chromium /dev/shm 不足会白屏/崩溃
+    environment:
+      ADVERTISED_HOST: 127.0.0.1        # agent 与本服务共享网络栈，CDP 直连回环
+      # noVNC 连接密码：留空=首次启动自动随机生成并持久化（见 entrypoint.sh）；
+      # WebUI「设置 → 远程桌面密码」改过的密码写入共享卷，容器重启后优先采用
+      VNC_PASSWORD: ${VNC_PASSWORD:-}
+      # 守护进程内部访问令牌（agent/scheduler 自动携带 X-Guardian-Token）
+      GUARDIAN_TOKEN: ${GUARDIAN_TOKEN:-}
+      # 浏览器资源模型（内存治理）：严格串行上限 / 闲置回收 / 接管保留时长
+      BROWSER_MAX_INSTANCES: ${BROWSER_MAX_INSTANCES:-1}
+      BROWSER_IDLE_TTL: ${BROWSER_IDLE_TTL:-900}
+      BROWSER_PIN_TTL: ${BROWSER_PIN_TTL:-7200}
+      DISPLAY: ":99"
+      TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      - "${NOVNC_PORT:-6080}:6080"       # 网页远程桌面（noVNC，需 VNC 密码）
+      - "${VNC_BIND_IP:-127.0.0.1}:${VNC_PORT:-5900}:5900"  # 原生 VNC：默认只绑回环（SSH 隧道），设 VNC_BIND_IP=0.0.0.0 才对外
+      - "${WEBUI_PORT:-8080}:8080"       # WebUI（agent 共享本服务网络栈，端口在此统一发布；内置登录鉴权）
+    volumes:
+      - shared-state:/app/state      # 登录态目录 + CDP 端口映射，与 agent 共享
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9100/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+
+  agent:
+    build:
+      context: ..                     # 仓库根
+      dockerfile: docker/agent/Dockerfile
+    image: newpj/agent:local
+    restart: unless-stopped
+    # 与 browser-gui 共享网络栈：新版 Chromium 已移除 --remote-debugging-address，
+    # CDP 只监听 127.0.0.1，跨容器必然连不上；共享 netns 后走回环即可连通，
+    # 顺带保证调试端口不暴露到容器网络。
+    network_mode: "service:browser-gui"
+    depends_on:
+      browser-gui:
+        condition: service_healthy
+    environment:
+      # 容器化模式：经守护进程接管每账号浏览器实例（替代本地 CDP_URL）
+      BROWSER_MGR_URL: http://127.0.0.1:9100
+      # WebUI「远程桌面 · 人工接管」iframe 地址（浏览器视角，经宿主映射访问）
+      NOVNC_URL: http://localhost:${NOVNC_PORT:-6080}/vnc.html
+      # 安全：访问 browser-gui 守护的令牌 + WebUI 登录账号（见 .env.example）
+      GUARDIAN_TOKEN: ${GUARDIAN_TOKEN:-}
+      WEBUI_USERNAME: ${WEBUI_USERNAME:-}
+      WEBUI_PASSWORD: ${WEBUI_PASSWORD:-}
+      WEBUI_COOKIE_SECURE: ${WEBUI_COOKIE_SECURE:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      FAL_KEY: ${FAL_KEY:-}
+      STABILITY_API_KEY: ${STABILITY_API_KEY:-}
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - shared-state:/app/state
+      - agent-logs:/app/logs          # 发布报告/任务日志持久化
+      # 定时任务清单（tasks.yaml）挂到宿主文件：WebUI/AI 工坊新建任务即时落盘，
+      # 与 scheduler 容器共享同一份，重启调度容器即生效（不会因重建镜像而丢失）
+      - ../config/tasks.yaml:/app/config/tasks.yaml
+
+  # 常驻定时调度（daily_post 等）：docker compose --profile scheduler up -d
+  # 注意：调度器与 WebUI 各自独立进程。同一账号发布/登录请错开（调度器占用时
+  # WebUI 会提示失败），避免同账号并发操作被平台风控。
+  scheduler:
+    image: newpj/agent:local
+    profiles: ["scheduler"]
+    restart: unless-stopped
+    network_mode: "service:browser-gui"   # 同 agent：共享 browser-gui 网络栈以访问 CDP
+    depends_on:
+      browser-gui:
+        condition: service_healthy
+    environment:
+      BROWSER_MGR_URL: http://127.0.0.1:9100
+      GUARDIAN_TOKEN: ${GUARDIAN_TOKEN:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      FAL_KEY: ${FAL_KEY:-}
+      STABILITY_API_KEY: ${STABILITY_API_KEY:-}
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - shared-state:/app/state
+      - agent-logs:/app/logs
+      - ../config/tasks.yaml:/app/config/tasks.yaml   # 与 agent 共享任务清单
+    command: ["python3", "-m", "agent.main"]
+
+volumes:
+  shared-state:
+  agent-logs:

@@ -1,0 +1,1354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>矩阵运营台 · 社交媒体自动发布</title>
+<style>
+  :root {
+    --bg:#0f1117; --bg2:#14161f; --card:#1a1d27; --card2:#20232f;
+    --line:#2a2e3d; --line2:#353a4d; --fg:#e6e9f2; --dim:#8b91a7;
+    --ok:#34d399; --bad:#f87171; --run:#fbbf24; --accent:#6366f1; --accent2:#818cf8;
+    --info:#60a5fa; --warn:#fbbf24;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--fg); font:14px/1.6 "PingFang SC","Microsoft YaHei",system-ui,sans-serif; display:flex; min-height:100vh; }
+  /* sidebar */
+  .sidebar { background:var(--bg2); border-right:1px solid var(--line); width:210px; min-height:100vh; position:fixed; display:flex; flex-direction:column; z-index:10; }
+  .brand { padding:18px 16px 12px; font-size:16px; font-weight:700; border-bottom:1px solid var(--line); }
+  .brand .sub { font-size:11px; font-weight:400; color:var(--dim); display:block; margin-top:2px; }
+  .nav { padding:8px 0; flex:1; }
+  .nav a { display:flex; align-items:center; gap:10px; padding:9px 16px; color:var(--dim); cursor:pointer; text-decoration:none; font-size:13px; transition:.15s; }
+  .nav a:hover { color:var(--fg); background:rgba(255,255,255,.03); }
+  .nav a.active { color:var(--fg); background:rgba(99,102,241,.12); border-right:2px solid var(--accent); }
+  .nav a svg { width:16px; height:16px; flex-shrink:0; opacity:.7; }
+  .nav a.active svg { opacity:1; }
+  .sidebar-foot { padding:12px 16px; border-top:1px solid var(--line); font-size:11px; }
+  .badge-mode { display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border-radius:4px; font-size:11px; font-weight:600; }
+  .badge-mode.ok { background:rgba(52,211,153,.15); color:var(--ok); }
+  .badge-mode.bad { background:rgba(248,113,113,.15); color:var(--bad); }
+  /* content */
+  .content { flex:1; margin-left:210px; display:flex; flex-direction:column; min-height:100vh; }
+  .topbar { background:var(--bg2); border-bottom:1px solid var(--line); padding:12px 24px; display:flex; align-items:center; justify-content:space-between; position:sticky; top:0; z-index:5; }
+  .topbar h1 { font-size:16px; }
+  .topbar .right { display:flex; align-items:center; gap:12px; font-size:12px; color:var(--dim); }
+  .dot { width:8px; height:8px; border-radius:50%; display:inline-block; flex-shrink:0; }
+  .dot.ok { background:var(--ok); } .dot.bad { background:var(--bad); } .dot.run { background:var(--run); animation:pulse 1.5s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:.4;} }
+  .views { flex:1; padding:24px; }
+  .view { display:none; } .view.on { display:block; }
+  /* shared */
+  button { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:6px 14px; cursor:pointer; font-size:13px; transition:.15s; }
+  button:hover { opacity:.85; }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  button.ghost { background:transparent; border:1px solid var(--line2); color:var(--dim); }
+  button.danger { background:#7f1d1d; }
+  button.sm { padding:3px 10px; font-size:12px; }
+  input, select, textarea { background:#0b0d12; color:var(--fg); border:1px solid var(--line2); border-radius:6px; padding:6px 10px; font-size:13px; outline:none; }
+  input:focus, select:focus, textarea:focus { border-color:var(--accent); }
+  textarea { resize:vertical; font-family:inherit; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; transition:.15s; }
+  .card:hover { border-color:var(--line2); }
+  .card h2 { font-size:15px; margin-bottom:12px; display:flex; justify-content:space-between; align-items:center; }
+  .card h3 { font-size:14px; margin-bottom:10px; color:var(--dim); }
+  .grid { display:grid; gap:14px; }
+  .grid-auto { grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); }
+  .grid-5 { grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); }
+  .grid-2 { grid-template-columns:1fr 1fr; gap:16px; }
+  pre { background:#0b0d12; border:1px solid var(--line); border-radius:8px; padding:10px; font-size:12px; overflow:auto; max-height:320px; white-space:pre-wrap; }
+  .tip { color:var(--dim); font-size:12px; }
+  .chip { display:inline-block; padding:1px 8px; border-radius:4px; font-size:11px; margin-right:4px; }
+  .chip.ok { background:rgba(52,211,153,.12); color:var(--ok); }
+  .chip.bad { background:rgba(248,113,113,.12); color:var(--bad); }
+  .chip.info { background:rgba(96,165,250,.12); color:var(--info); }
+  .chip.dim { background:rgba(139,145,167,.12); color:var(--dim); }
+  .chip.accent { background:rgba(99,102,241,.12); color:var(--accent2); }
+  .stat-card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; text-align:center; }
+  .stat-card .num { font-size:28px; font-weight:700; }
+  .stat-card .lbl { color:var(--dim); font-size:12px; margin-top:2px; }
+  .acct-cell { background:var(--card2); border:1px solid var(--line2); border-radius:8px; padding:10px 12px; display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+  .acct-cell .name { flex:1; font-size:13px; }
+  .acct-cell .cap-chips { font-size:10px; }
+  .qr { margin:8px 0; }
+  .qr img { max-width:200px; image-rendering:pixelated; border:6px solid #fff; border-radius:6px; }
+  .status-line { color:var(--dim); font-size:12px; margin-top:4px; }
+  form { display:flex; flex-direction:column; gap:10px; }
+  .form-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .form-row label { min-width:65px; color:var(--dim); font-size:12px; }
+  .form-row input, .form-row select { flex:1; min-width:100px; }
+  .form-row textarea { flex:1; min-width:100px; }
+  .timeline-step { display:flex; align-items:flex-start; gap:10px; padding:8px 0; border-bottom:1px solid var(--line); }
+  .timeline-step:last-child { border-bottom:0; }
+  .timeline-step .icon { font-size:14px; flex-shrink:0; width:20px; text-align:center; }
+  .timeline-step .body { flex:1; }
+  .timeline-step .body .step-name { font-size:13px; font-weight:500; }
+  .timeline-step .body .step-detail { font-size:12px; color:var(--dim); }
+  .timeline-step.running .icon { animation:spin 1s linear infinite; }
+  @keyframes spin { to{transform:rotate(360deg);} }
+  .report-item { border-bottom:1px solid var(--line); padding:8px 0; font-size:13px; cursor:pointer; }
+  .report-detail { display:none; padding:8px 0 4px 16px; font-size:12px; color:var(--dim); }
+  .report-item.expanded .report-detail { display:block; }
+  .actions { display:flex; gap:10px; margin-bottom:16px; flex-wrap:wrap; }
+  .filter-bar { display:flex; gap:8px; align-items:center; margin-bottom:14px; flex-wrap:wrap; }
+  .filter-bar label { font-size:12px; color:var(--dim); display:flex; align-items:center; gap:4px; }
+  .platform-row { display:flex; align-items:flex-start; gap:12px; margin-bottom:16px; }
+  .platform-label { min-width:80px; font-weight:600; font-size:13px; padding-top:10px; }
+  .platform-accounts { flex:1; }
+  .new-acct-bar { display:flex; gap:6px; margin-bottom:16px; align-items:center; }
+  .empty-hint { color:var(--dim); font-size:12px; padding:8px 12px; border:1px dashed var(--line2); border-radius:6px; cursor:pointer; }
+  .empty-hint:hover { border-color:var(--accent); color:var(--fg); }
+  .cap-table { width:100%; border-collapse:collapse; font-size:13px; }
+  .cap-table th, .cap-table td { border:1px solid var(--line); padding:6px 10px; text-align:center; }
+  .cap-table th { background:var(--card2); color:var(--dim); font-weight:500; }
+  .guide-step { padding:6px 0; border-bottom:1px solid var(--line); font-size:13px; color:var(--dim); }
+  .guide-step:last-child { border-bottom:0; }
+  .guide-step code { background:var(--card2); padding:1px 6px; border-radius:3px; font-size:12px; color:var(--accent2); }
+  .collapsible { cursor:pointer; padding:8px 0; font-size:14px; }
+  .collapsible:hover { color:var(--accent2); }
+  .collapsible-content { display:none; }
+  .collapsible-content.on { display:block; }
+  /* ===== 设置：模型与密钥 ===== */
+  .llm-row input { margin-bottom:0; }
+  .rm-tagline { color:var(--dim); font-size:12px; font-weight:400; }
+  /* ===== AI 工坊 ===== */
+  .chip-row { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+  .bg-grid { display:flex; flex-wrap:wrap; gap:10px; }
+  .bg-tile { width:76px; text-align:center; cursor:pointer; border:2px solid transparent; border-radius:10px; padding:4px; font-size:11px; line-height:1.3; color:var(--dim); }
+  .bg-tile img { width:100%; height:104px; object-fit:cover; border-radius:8px; display:block; background:#fff; }
+  .bg-tile.sel { border-color:var(--accent); background:rgba(100,120,255,.08); color:var(--fg); }
+  .mu-row { display:flex; align-items:center; gap:8px; padding:6px 8px; border:1px solid var(--line); border-radius:8px; margin-bottom:6px; cursor:pointer; }
+  .mu-row.sel { border-color:var(--accent); background:rgba(100,120,255,.08); }
+  .ghost-btn-sm { background:none; border:1px dashed var(--line); color:var(--dim); padding:4px 10px; border-radius:6px; cursor:pointer; font-size:12px; }
+</style>
+</head>
+<body>
+
+<!-- ============ 侧边栏 ============ -->
+<aside class="sidebar">
+  <div class="brand">矩阵运营台<span class="sub">社交媒体自动发布</span></div>
+  <nav class="nav" id="nav">
+    <a data-view="dashboard" class="active"><svg viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="1" width="6" height="6" rx="1"/><rect x="9" y="1" width="6" height="6" rx="1"/><rect x="1" y="9" width="6" height="6" rx="1"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>仪表盘</a>
+    <a data-view="matrix"><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="4" cy="4" r="2"/><circle cx="12" cy="4" r="2"/><circle cx="4" cy="12" r="2"/><circle cx="12" cy="12" r="2"/></svg>账号矩阵</a>
+    <a data-view="publish"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M2 2h12v9l-4-4-2 2-4-4-2 2z"/></svg>内容发布</a>
+    <a data-view="tasks"><svg viewBox="0 0 16 16" fill="currentColor"><rect x="2" y="3" width="12" height="2" rx="1"/><rect x="2" y="7" width="12" height="2" rx="1"/><rect x="2" y="11" width="12" height="2" rx="1"/></svg>任务调度</a>
+    <a data-view="studio"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M7 2l1-1 1 1 1.5.5L11 3l.5 1.5 1.5.5.5 1.5.5.5-.5 1.5-.5.5-.5 1.5-1.5.5L11 12l-1 1-1-.5L7.5 12 6 11.5 5.5 10 4 9.5 3.5 9l.5-1.5.5-.5L5 5.5 6.5 5 7 4z"/><circle cx="9.5" cy="6" r=".8" fill="var(--bg)"/><circle cx="6.5" cy="9" r=".8" fill="var(--bg)"/></svg>AI 工坊</a>
+    <a data-view="progress"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6"/><path d="M8 4v4l3 2"/></svg>实时进度</a>
+    <a data-view="reports"><svg viewBox="0 0 16 16" fill="currentColor"><rect x="2" y="2" width="12" height="12" rx="2"/><rect x="5" y="5" width="6" height="6" rx="1" fill="var(--bg)"/></svg>报告日志</a>
+    <a data-view="settings"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 5a3 3 0 100 6 3 3 0 000-6zm0 1.5a1.5 1.5 0 110 3 1.5 1.5 0 010-3z"/><path d="M8 1l1 2 2-1 1 2-1 2 2 1 1 2-2 1 1 2-2-1-1 2-1-1-2 1-1-2-1-2 1-1-1-2 1-2z" opacity=".4"/></svg>设置部署</a>
+  </nav>
+  <div class="sidebar-foot">
+    部署：<span id="mode-badge" class="badge-mode ok">Browser-GUI</span>
+    <div style="margin-top:6px;line-height:1.5">模型: <span id="llm-badge">—</span></div>
+  </div>
+</aside>
+
+<!-- ============ 主内容 ============ -->
+<div class="content">
+  <header class="topbar">
+    <h1 id="view-title">仪表盘</h1>
+    <div class="right">
+      <a id="btn-remote-desktop" href="/remote-desktop" target="_blank" style="display:none;margin-right:14px;text-decoration:none;font-size:12px;color:var(--ok);border:1px solid var(--ok);padding:4px 10px;border-radius:6px" title="打开网页远程桌面：查看/接管 browser-gui 里真实浏览器窗口（滑块、扫码、人工验证）">🖥 远程桌面 · 人工接管</a>
+      <span id="auth-user" style="margin-right:12px;font-size:12px;color:var(--dim)"></span>
+      <a id="btn-logout" href="javascript:;" onclick="logoutMe()" style="font-size:12px;color:#ff9d9d;text-decoration:none;border:1px solid rgba(255,157,157,.4);padding:3px 10px;border-radius:6px" title="退出登录">退出登录</a>
+      <span id="poll-status" style="margin-left:12px">刷新中…</span>
+    </div>
+  </header>
+  <div class="views">
+
+  <!-- ===== 仪表盘 ===== -->
+  <section class="view on" id="view-dashboard">
+    <div class="grid grid-5" style="margin-bottom:16px" id="stat-cards"></div>
+    <div class="grid grid-2">
+      <div class="card">
+        <h2>平台概览</h2>
+        <div id="dash-platforms"></div>
+      </div>
+      <div class="card">
+        <h2>进行中任务</h2>
+        <div id="dash-tasks"></div>
+        <h2 style="margin-top:16px">最近报告</h2>
+        <div id="dash-reports"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 账号矩阵 ===== -->
+  <section class="view" id="view-matrix">
+    <div class="filter-bar">
+      <label><input type="checkbox" id="filter-offline"> 仅看未登录</label>
+      <button class="ghost sm" onclick="recheckAll()" style="margin-left:auto" title="登录完成后点这里立即重新检测，不用等自动轮询">⟳ 全部重新检测</button>
+    </div>
+    <div id="matrix-grid"></div>
+    <div class="new-acct-bar" style="margin-top:16px">
+      <select id="new-platform"></select>
+      <input id="new-profile" placeholder="账号名（如：主号 / 副号）" style="flex:1;max-width:240px">
+      <button id="btn-new-acct">新建账号</button>
+    </div>
+  </section>
+
+  <!-- ===== 内容发布 ===== -->
+  <section class="view" id="view-publish">
+    <div class="card" style="margin-bottom:14px">
+      <h2>🎲 一键模拟测试发布 <span class="rm-tagline">无 AI / 无 Key：模板文案 + Pillow 生成卡片，专测“登录 → 素材 → 发布”链路，内容带 [测试] 标记</span></h2>
+      <div class="form-row" style="margin-bottom:8px">
+        <label>目标平台</label><select id="mock-platform"></select>
+        <label>发布账号</label><select id="mock-profile"></select>
+        <label>可见性</label>
+        <select id="mock-visibility" style="flex:0 0 130px"><option value="private">仅自己可见</option><option value="friends">好友可见</option><option value="public">公开</option></select>
+      </div>
+      <div class="form-row">
+        <button id="btn-mock-fill" class="ghost">📝 仅生成文案并填入上方表单</button>
+        <button id="btn-mock-publish">⚡ 直接测试发布</button>
+        <span class="tip" id="mock-msg"></span>
+      </div>
+    </div>
+    <div class="grid grid-2">
+      <div class="card">
+        <h2>手动发布</h2>
+        <form id="publish-form" enctype="multipart/form-data">
+          <div class="form-row"><label>平台</label><select id="pub-platform"></select></div>
+          <div class="form-row"><label>账号</label><select id="pub-profile"></select></div>
+          <div class="form-row"><label>标题</label><input id="pub-title" placeholder="发布标题"></div>
+          <div class="form-row"><label>正文</label><textarea id="pub-content" rows="3" placeholder="正文内容"></textarea></div>
+          <div class="form-row"><label>标签</label><input id="pub-tags" placeholder="逗号分隔，如：测试,生活"></div>
+          <div class="form-row"><label>可见性</label><select id="pub-visibility"><option value="private">仅自己可见</option><option value="friends">好友可见</option><option value="public">公开</option></select></div>
+          <div class="form-row" id="pub-images-row"><label>图片</label><input type="file" id="pub-images" multiple accept="image/*"></div>
+          <div class="form-row" id="pub-video-row"><label>视频</label><input type="file" id="pub-video" accept="video/*"></div>
+          <div class="form-row"><button type="submit">发布</button><span class="tip" id="pub-msg"></span></div>
+        </form>
+      </div>
+      <div class="card">
+        <h2>发布状态</h2>
+        <div id="pub-active"></div>
+        <h3 style="margin-top:14px">最近发布</h3>
+        <div id="pub-recent"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 任务调度 ===== -->
+  <section class="view" id="view-tasks">
+    <div class="actions">
+      <button id="btn-daily">▶ 立即执行 每日发帖</button>
+      <button id="btn-traffic">▶ 立即执行 流量维护</button>
+    </div>
+    <div class="tip" id="task-trigger-msg" style="margin-bottom:14px"></div>
+    <div class="grid grid-2">
+      <div class="card">
+        <h2>新建定时任务</h2>
+        <form id="cron-form">
+          <div class="form-row"><label>任务名</label><input id="cron-name" placeholder="留空自动命名"></div>
+          <div class="form-row"><label>类型</label><select id="cron-type"><option value="daily_post">每日发帖</option><option value="maintain_traffic">流量维护</option></select></div>
+          <div class="form-row"><label>频率</label><select id="cron-freq"><option value="daily">每天</option><option value="weekly">每周</option><option value="custom">自定义 cron</option></select></div>
+          <div class="form-row" id="row-daily-time"><label>时间</label><input type="time" id="cron-time" value="09:00"></div>
+          <div class="form-row" id="row-weekday" style="display:none"><label>星期</label><select id="cron-weekday"><option value="1">一</option><option value="2">二</option><option value="3">三</option><option value="4">四</option><option value="5">五</option><option value="6">六</option><option value="0">日</option></select><input type="time" id="cron-time-w" value="10:00"></div>
+          <div class="form-row" id="row-custom" style="display:none"><label>cron</label><input id="cron-expr" placeholder="分 时 日 月 周"></div>
+          <div class="form-row" style="align-items:flex-start"><label>定制<br><span style="font-size:11px">可选</span></label><div style="flex:1;display:flex;flex-direction:column;gap:6px"><input id="cron-persona" placeholder="人设"><input id="cron-materials" placeholder="素材（一行一个）"><input id="cron-tags" placeholder="话题（逗号分隔）"></div></div>
+          <div class="form-row" style="align-items:flex-start;display:none" id="row-traffic"><label>作品链接<br><span style="font-size:11px">流量维护</span></label><div style="flex:1;display:flex;flex-direction:column;gap:6px"><textarea id="cron-notes" rows="3" placeholder="每行一个：平台 作品链接 [一句话主题]&#10;例：douyin https://v.douyin.com/xxxx 新中式茶馆冷泡茶上新"></textarea><div class="form-row" style="margin:0;align-items:center"><label style="min-width:60px">每作品回复</label><input type="number" id="cron-max-replies" value="10" min="1" max="50" style="width:80px"></div></div></div>
+          <div class="form-row"><button type="submit">保存</button><span class="tip" id="cron-msg"></span></div>
+        </form>
+      </div>
+      <div class="card">
+        <h2>已有任务</h2>
+        <div id="cron-list"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== AI 运营工坊 ===== -->
+  <section class="view" id="view-studio">
+    <div class="grid grid-2" style="grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);align-items:start">
+      <div>
+        <div class="card">
+          <h2>① 说一句你的生意 → AI 生成整套运营方案</h2>
+          <div class="tip" style="margin-bottom:6px">行业预设（点一下填充）：</div>
+          <div id="st-presets" class="chip-row"></div>
+          <div class="form-row" style="margin-top:10px;align-items:flex-start">
+            <label style="min-width:120px">一句话需求<br><span style="font-size:11px">行业/店铺 + 特点 + 目标</span></label>
+            <textarea id="st-brief" rows="3" placeholder="例：我在老城区开了家新中式茶馆，主营冷泡茶和茶器文创，想结合节气与热点把流量引到店里…"></textarea>
+          </div>
+          <div class="form-row"><label style="min-width:120px">运营目标</label><select id="st-goal"><option value="">涨粉 + 引流转化（让 AI 结合行业判断）</option><option value="涨粉打造账号IP">稳定涨粉打造 IP</option><option value="引流到店/到户成交">引流到店 / 到户成交</option><option value="新品上新种草">新品上新种草</option></select></div>
+          <div class="form-row"><label style="min-width:120px">计划发布到</label><div id="st-plat" class="chip-row"></div></div>
+          <div class="form-row">
+            <button id="btn-st-generate">✦ AI 生成定制包</button>
+            <button class="ghost" id="btn-st-reg" style="display:none">↻ 换个思路再生成</button>
+            <span class="tip" id="st-msg"></span>
+          </div>
+        </div>
+
+        <div class="card" id="st-result-card" style="display:none;margin-top:14px">
+          <h2>定制包预览 <span class="rm-tagline" id="st-packname"></span></h2>
+          <div id="st-summary"></div>
+          <details style="margin-top:10px"><summary style="cursor:pointer;color:var(--dim);font-size:12px">高级：直接改 JSON（保存前生效）</summary>
+            <textarea id="st-json" rows="8" style="margin-top:8px;font-family:ui-monospace,monospace;font-size:12px"></textarea>
+            <div class="form-row"><button class="ghost sm" id="btn-st-apply">应用 JSON 修改</button><span class="tip" id="st-json-msg"></span></div>
+          </details>
+        </div>
+
+        <div class="card" id="st-schedule-card" style="display:none;margin-top:14px">
+          <h2>③ 一键调度</h2>
+          <div class="tip" style="margin-bottom:8px">背景模板已按 AI 推荐预选，可直接换；BGM 需自行上传（未选则无声）。</div>
+          <div class="form-row"><label style="min-width:120px">任务名</label><input id="st-task-name" placeholder="留空按档案名生成"></div>
+          <div class="form-row"><label style="min-width:120px">频率</label><select id="st-freq"><option value="daily">每天</option><option value="weekly">每周</option><option value="custom">自定义 cron</option></select></div>
+          <div class="form-row" id="st-row-time"><label style="min-width:120px">每天时间</label><input type="time" id="st-time" value="10:30"></div>
+          <div class="form-row" id="st-row-week" style="display:none"><label style="min-width:120px">每周</label><select id="st-weekday"><option value="1">周一</option><option value="2">周二</option><option value="3">周三</option><option value="4">周四</option><option value="5">周五</option><option value="6">周六</option><option value="0">周日</option></select><input type="time" id="st-time-w" value="10:30"></div>
+          <div class="form-row" id="st-row-custom" style="display:none"><label style="min-width:120px">cron</label><input id="st-cron" placeholder="分 时 日 月 周"></div>
+          <div class="form-row"><label style="min-width:120px">草稿数/次</label><input id="st-drafts" type="number" min="1" max="8" value="3" style="max-width:90px"><span class="tip" style="margin-left:8px">每天/每周按任务频率出 N 篇</span></div>
+          <div class="form-row" style="align-items:flex-start"><label style="min-width:120px">卡片背景<br><span style="font-size:11px">模板风格</span></label><div id="st-bg" class="bg-grid"></div></div>
+          <div class="form-row" style="align-items:flex-start"><label style="min-width:120px">配乐 BGM</label><div id="st-music" style="flex:1"></div></div>
+          <div class="form-row"><button id="btn-st-save">💾 保存为定时任务</button><button class="ghost" id="btn-st-run">▶ 保存并立即执行一次</button><span class="tip" id="st-sched-msg"></span></div>
+        </div>
+      </div>
+
+      <div>
+        <div class="card">
+          <h2>素材中心 <span class="rm-tagline">内置模板 / 可上传你的图与音乐</span></h2>
+          <div id="st-assets"><div class="tip">加载中…</div></div>
+        </div>
+        <div class="card" style="margin-top:14px">
+          <h2>② 定制包库 <span class="rm-tagline">生成过的档案自动入库，可复用</span></h2>
+          <div id="st-packs"><div class="tip">暂无定制包，先生成一个吧</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 实时进度 ===== -->
+  <section class="view" id="view-progress">
+    <div class="card">
+      <h2>任务进度</h2>
+      <div id="progress-content"><div class="tip">暂无运行中的任务。到"任务调度"页触发一个任务试试。</div></div>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <div class="collapsible" onclick="this.nextElementSibling.classList.toggle('on')">▾ 实时日志（最近 50 行）</div>
+      <div class="collapsible-content"><pre id="progress-log"></pre></div>
+    </div>
+  </section>
+
+  <!-- ===== 报告日志 ===== -->
+  <section class="view" id="view-reports">
+    <div class="card">
+      <h2>任务报告</h2>
+      <div id="reports-list"></div>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <h2>运行日志（最近 200 行）</h2>
+      <pre id="log-box"></pre>
+    </div>
+  </section>
+
+  <!-- ===== 设置部署 ===== -->
+  <section class="view" id="view-settings">
+    <div class="grid grid-2">
+      <div class="card">
+        <h2>部署信息</h2>
+        <div id="settings-deploy"></div>
+      </div>
+      <div class="card">
+        <h2>平台能力矩阵</h2>
+        <div id="settings-caps"></div>
+      </div>
+    </div>
+    <div class="card" id="vnc-card" style="margin-top:14px;display:none">
+      <h2>远程桌面（noVNC）密码</h2>
+      <div class="acct-cell"><span class="tip" style="min-width:90px">当前密码</span><input id="vnc-cur" readonly style="width:200px" value="…"><span class="tip" id="vnc-src" style="margin-left:8px"></span></div>
+      <div class="acct-cell"><span class="tip" style="min-width:90px">修改密码</span><input id="vnc-new" type="text" placeholder="至少 6 位" style="width:200px"><button class="ghost sm" id="vnc-save" style="margin-left:8px">保存并立即生效</button><span class="tip" id="vnc-msg" style="margin-left:8px"></span></div>
+      <div class="tip" style="margin-top:6px">· 修改后立即生效，noVNC / 浏览器远程桌面 <b>下次连接请使用新密码</b>；容器重启后保留（不会退回 .env 旧值）。<br>· 密码以明文展示，本面板仅限管理员访问，请勿将链接外泄。</div>
+    </div>
+    <div class="card" style="margin-top:14px" id="llm-card">
+      <h2>模型与密钥 <span class="rm-tagline">AI 文案生成/评分/评论走「默认模型」；支持多模型池随时切换（全部 OpenAI 兼容）</span></h2>
+      <div class="tip" style="margin-bottom:10px">每行一个模型提供商：名称 + Base URL + 模型名 + API Key。API Key 留空 = 保持不变（新加行需填 Key 才能启用 AI）。改动点「保存全部配置」即生效。</div>
+      <div id="llm-rows" style="display:flex;flex-direction:column;gap:10px;margin-bottom:10px"></div>
+      <div class="form-row">
+        <button class="ghost sm" id="btn-add-provider">＋ 添加模型提供商</button>
+        <label style="margin-left:auto;min-width:0;color:var(--dim);font-size:12px">默认模型：</label>
+        <select id="llm-active" style="flex:0 1 320px"></select>
+      </div>
+      <h3 style="margin:14px 0 8px">生图密钥（可选，用于任务里的图片/视频素材生成）</h3>
+      <div class="form-row"><label>FAL Key</label><input id="set-fal-key" type="password" autocomplete="new-password" placeholder="fal-xxx…（未配置）"></div>
+      <div class="form-row"><label>Stability</label><input id="set-stab-key" type="password" autocomplete="new-password" placeholder="sk-xxx…（未配置）"></div>
+      <div class="form-row" style="margin-top:12px"><button id="btn-save-llm">保存全部配置</button><span class="tip" id="llm-msg"></span></div>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <div class="collapsible" id="guide-toggle">▸ Linux 部署指南</div>
+      <div class="collapsible-content" id="guide-content"></div>
+    </div>
+    <div class="card" style="margin-top:14px" id="auth-card">
+      <h2>账号安全</h2>
+      <div class="acct-cell"><span class="tip" style="min-width:90px">当前登录账号</span><b id="auth-username">…</b><span class="tip" id="auth-source" style="margin-left:8px"></span></div>
+      <div class="acct-cell"><span class="tip" style="min-width:90px">修改登录密码</span><input id="auth-old" type="password" placeholder="当前密码" style="width:170px" autocomplete="current-password"><input id="auth-new" type="password" placeholder="新密码（至少 8 位）" style="width:180px" autocomplete="new-password"><button class="ghost sm" id="auth-save" style="margin-left:8px">修改</button><span class="tip" id="auth-msg" style="margin-left:8px"></span></div>
+      <div class="tip" style="margin-top:6px">· 本面板所有页面与接口均需登录（会话 7 天）。若启动日志打印过随机密码，请立即在此改成自己的。<br>· 公网/云端部署建议在 .env 设置 <code>WEBUI_USERNAME</code> / <code>WEBUI_PASSWORD</code>，并前置 HTTPS 反向代理 + 设 <code>WEBUI_COOKIE_SECURE=true</code>；不要直接把 8080/6080 裸暴露到公网。</div>
+    </div>
+  </section>
+
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const PLATFORM_ORDER = ["douyin","xiaohongshu","wechat_channels","zhihu","toutiao"];
+const PLATFORM_NAMES = { douyin:"抖音", xiaohongshu:"小红书", wechat_channels:"微信视频号", zhihu:"知乎", toutiao:"今日头条" };
+const PLATFORM_ICONS = { douyin:"🎵", xiaohongshu:"📕", wechat_channels:"📹", zhihu:"📝", toutiao:"📰" };
+let currentStatus = null;
+let currentDashboard = null;
+let currentView = "dashboard";
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (r.status === 401) {  // 未登录/会话过期 → 跳登录页
+    window.location.href = "/login";
+    throw new Error("未登录或会话已过期");
+  }
+  if (!r.ok) {
+    try { const j = await r.json(); return (j && typeof j === "object") ? j : { ok:false, message:"HTTP " + r.status }; }
+    catch (_) { return { ok:false, message:"HTTP " + r.status }; }
+  }
+  return r.json();
+}
+
+// ============ 视图路由 ============
+function switchView(name) {
+  currentView = name;
+  document.querySelectorAll(".nav a").forEach(a => a.classList.toggle("active", a.dataset.view === name));
+  document.querySelectorAll(".view").forEach(v => v.classList.remove("on"));
+  $("#view-" + name).classList.add("on");
+  const titles = { dashboard:"仪表盘", matrix:"账号矩阵", publish:"内容发布", tasks:"任务调度", progress:"实时进度", reports:"报告日志", settings:"设置部署", studio:"AI 运营工坊" };
+  $("#view-title").textContent = titles[name] || name;
+  if (name === "matrix") refresh();
+  if (name === "dashboard") refreshDashboard();
+  if (name === "progress") refreshProgress();
+  if (name === "reports") refreshLogs();
+  if (name === "settings") refreshSettings();
+  if (name === "publish") refreshPublish();
+  if (name === "tasks") loadCronTasks();
+  if (name === "studio") openStudio();
+}
+document.querySelectorAll(".nav a").forEach(a => a.addEventListener("click", () => switchView(a.dataset.view)));
+
+// ============ 仪表盘 ============
+async function refreshDashboard() {
+  const data = await api("/api/dashboard");
+  if (!data.ok && data.message) return;
+  currentDashboard = data;
+  // 统计卡片
+  const t = data.totals || {};
+  $("#stat-cards").innerHTML = [
+    statCard(t.accounts||0, "账号总数", "ok"),
+    statCard(t.logged_in||0, "已登录", t.logged_in > 0 ? "ok" : "bad"),
+    statCard(t.running_tasks||0, "运行中任务", t.running_tasks > 0 ? "run" : "dim"),
+    statCard((data.recent_reports||[]).length, "最近报告", "info"),
+  ].join("");
+  // 平台概览
+  const platforms = data.platforms || {};
+  $("#dash-platforms").innerHTML = PLATFORM_ORDER.map(pid => {
+    const p = platforms[pid]; if (!p) return "";
+    const caps = p.capabilities || {};
+    const chips = [["image","图文"],["video","视频"],["article","文章"]].filter(([k]) => caps[k]).map(([,l]) => `<span class="chip accent">${l}</span>`).join("");
+    return `<div class="acct-cell">
+      <span style="font-size:18px">${PLATFORM_ICONS[pid]||"🌐"}</span>
+      <div class="name">${p.name}<br><span class="tip">登录 ${p.logged_in_count}/${p.account_count}</span></div>
+      <span class="cap-chips">${chips}</span>
+    </div>`;
+  }).join("");
+  // 进行中任务
+  const tasks = data.active_tasks || {};
+  const taskHtml = Object.entries(tasks).map(([name, t]) => {
+    if (!t.running) return "";
+    const steps = t.steps || [];
+    return `<div class="acct-cell"><span class="dot run"></span><div class="name">${name}<br><span class="tip">当前: ${t.current_step||"…"} (${steps.length} 步)</span></div></div>`;
+  }).join("");
+  $("#dash-tasks").innerHTML = taskHtml || '<div class="tip">无运行中任务</div>';
+  // 最近报告
+  const reports = data.recent_reports || [];
+  $("#dash-reports").innerHTML = reports.length ? reports.map(r => {
+    const cls = r.success ? "ok" : "bad";
+    return `<div class="report-item"><span class="chip ${cls}">${r.success?"✓":"✗"}</span> <b>${r.task_name}</b> <span class="tip">${r.started_at}</span></div>`;
+  }).join("") : '<div class="tip">暂无报告</div>';
+  // 侧边栏徽章 + 模型状态 + 远程桌面入口（容器化 Browser-GUI）
+  const dep = data.deployment || {};
+  const badge = $("#mode-badge");
+  badge.textContent = "Browser-GUI";
+  badge.className = "badge-mode ok";
+  badge.title = `容器化部署：浏览器跑在 browser-gui（${dep.browser_mgr_url}）\n每账号独立 Chrome 窗口，noVNC 远程桌面可人工接管`;
+  const rdBtn = $("#btn-remote-desktop");
+  if (rdBtn) rdBtn.style.display = dep.novnc_url ? "inline-flex" : "none";
+  updateSidebarLlm(dep.llm);
+  $("#poll-status").textContent = new Date().toLocaleTimeString();
+}
+function statCard(num, lbl, color) {
+  return `<div class="stat-card"><div class="num" style="color:var(--${color==='dim'?'dim':color})">${num}</div><div class="lbl">${lbl}</div></div>`;
+}
+
+// ============ 账号矩阵 ============
+function renderMatrix(data) {
+  const grid = $("#matrix-grid");
+  const filterOffline = $("#filter-offline").checked;
+  const platforms = data.platforms || {};
+  grid.innerHTML = "";
+  for (const pid of PLATFORM_ORDER) {
+    const p = platforms[pid]; if (!p) continue;
+    const accts = (p.accounts || []).filter(a => !filterOffline || !a.logged_in);
+    const row = document.createElement("div");
+    row.className = "platform-row";
+    let accountsHtml = "";
+    if (accts.length === 0) {
+      accountsHtml = `<div class="empty-hint" onclick="$('#new-platform').value='${pid}';$('#new-profile').focus()">+ 新建${p.name}账号</div>`;
+    } else {
+      for (const acct of accts) {
+        const caps = p.capabilities || {};
+        const capChips = [["image","图"],["video","视"],["article","文"]].filter(([k]) => caps[k]).map(([,l]) => `<span class="chip dim">${l}</span>`).join("");
+        const dotCls = acct.logged_in ? "ok" : "bad";
+        // 容器化接管：打开该账号浏览器窗口 + 全屏 noVNC 远程桌面（可拖滑块/扫码/验证码）
+        const ckBtn = `<button class="ghost sm" onclick="openRemote('${pid}','${acct.profile}')" title="打开该账号浏览器到远程桌面，在真实窗口里扫码/拖滑块验证">🖥 ${acct.logged_in ? "远程接管" : "未登录 · 去远程登录"}</button>`;
+        const chkBtn = `<button class="ghost sm" onclick="forceCheck('${pid}','${acct.profile}')" title="立即重新检测该账号登录态（在远程桌面登录完成后点这个，马上变绿）">⟳ 检测</button>`;
+        accountsHtml += `<div class="acct-cell">
+          <span class="dot ${dotCls}"></span>
+          <span class="name">${PLATFORM_ICONS[pid]||""} ${acct.profile}</span>
+          <span class="cap-chips">${capChips}</span>
+          <span class="tip">${acct.logged_in?"已登录":"未登录"}</span>
+          ${ckBtn}
+          ${chkBtn}
+          <button class="danger sm" onclick="doLogout('${pid}','${acct.profile}')">删除</button>
+        </div>`;
+      }
+    }
+    row.innerHTML = `<div class="platform-label">${PLATFORM_ICONS[pid]||""} ${p.name}</div><div class="platform-accounts">${accountsHtml}</div>`;
+    grid.appendChild(row);
+  }
+}
+
+// ============ 登录/登出 ============
+async function refresh() {
+  const data = await api("/api/status");
+  currentStatus = data;
+  if (currentView === "matrix") renderMatrix(data);
+  if (currentView === "dashboard") refreshDashboard();
+  // 更新发布页账号列表
+  updatePublishAccounts();
+  updateMockAccounts();
+}
+async function doLogout(platform, profile) {
+  if (!confirm(`确认删除 ${PLATFORM_NAMES[platform]}/${profile}？`)) return;
+  await api("/api/logout", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ platform, profile }) });
+  refresh();
+}
+
+// ============ 人工接管（容器化 noVNC 全屏远程桌面） ============
+function showToast(msg, ms) {
+  let el = $("#toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "toast";
+    el.style.cssText = "position:fixed;right:18px;top:58px;z-index:999;max-width:440px;background:#0e2a1d;color:#d8ffe9;border:1px solid #2f9e5f;border-radius:10px;padding:10px 14px;font-size:13px;line-height:1.6;box-shadow:0 8px 20px rgba(0,0,0,.5)";
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.display = "block";
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.style.display = "none"; }, ms || 7000);
+}
+const RD_BUSY = {};
+async function openRemote(platform, profile) {
+  // 容器化唯一接管方式：后台把该账号浏览器窗口拉到 noVNC 桌面并打开登录页，
+  // 再打开全屏远程桌面让用户真实操作（滑块/扫码/输验证码）。
+  const key = platform + "/" + (profile || "");
+  if (RD_BUSY[key]) return;
+  RD_BUSY[key] = true;
+  try {
+    const r = await api("/api/remote/prepare", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ platform, profile: profile || null }) });
+    if (!r.ok) {
+      showToast("远程接管准备失败：" + (r.message || r.error || "未知错误"), 8000);
+      return;
+    }
+    window.open("/remote-desktop", "_blank");
+    showToast(`已为「${PLATFORM_NAMES[platform] || platform} / ${profile || "默认"}」打开浏览器窗口（远程桌面可见）。在桌面窗口完成扫码/滑块后，回本页点「⟳ 检测」立即刷新登录态。`, 12000);
+  } finally { delete RD_BUSY[key]; }
+}
+// 手动「⟳ 检测」：清缓存 + 强制后台立刻重新探测（刚在远程桌面登录完点这个最快）
+const CHK_BUSY = {};
+async function forceCheck(platform, profile) {
+  const key = platform + "/" + profile;
+  if (CHK_BUSY[key]) return;
+  CHK_BUSY[key] = true;
+  try {
+    const r = await api("/api/accounts/refresh", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ platform, profile: profile || null }) });
+    showToast(r.message || (r.ok ? "已发起检测" : "检测失败"), 9000);
+    if (r.ok) { setTimeout(refresh, 1500); setTimeout(refresh, 6000); }
+  } finally { delete CHK_BUSY[key]; }
+}
+async function recheckAll() {
+  const r = await api("/api/accounts/refresh", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({}) });
+  showToast(r.message || "已发起全量检测", 9000);
+  if (r.ok) { setTimeout(refresh, 1500); setTimeout(refresh, 6000); }
+}
+
+// ============ 新建账号 ============
+function initNewAccount() {
+  $("#new-platform").innerHTML = PLATFORM_ORDER.map(p => `<option value="${p}">${PLATFORM_ICONS[p]} ${PLATFORM_NAMES[p]}</option>`).join("");
+}
+$("#btn-new-acct").addEventListener("click", async () => {
+  const platform = $("#new-platform").value;
+  const profile = $("#new-profile").value.trim();
+  if (!profile) { alert("请输入账号名"); return; }
+  const r = await api("/api/profile", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ platform, profile }) });
+  alert(r.ok ? `已创建 ${PLATFORM_NAMES[platform]}/${profile}` : r.message);
+  refresh();
+});
+
+// ============ 任务触发 ============
+$("#btn-daily").addEventListener("click", () => runTask("daily_post"));
+$("#btn-traffic").addEventListener("click", () => runTask("maintain_traffic"));
+async function runTask(name) {
+  const r = await api("/api/run", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ task: name }) });
+  $("#task-trigger-msg").textContent = r.ok ? `✓ ${name} 已触发，跳转实时进度…` : r.message;
+  if (r.ok) switchView("progress");
+}
+
+// ============ 定时任务 ============
+$("#cron-freq").addEventListener("change", () => {
+  const v = $("#cron-freq").value;
+  $("#row-daily-time").style.display = v === "daily" ? "flex" : "none";
+  $("#row-weekday").style.display = v === "weekly" ? "flex" : "none";
+  $("#row-custom").style.display = v === "custom" ? "flex" : "none";
+});
+$("#cron-type").addEventListener("change", () => {
+  $("#row-traffic").style.display = $("#cron-type").value === "maintain_traffic" ? "flex" : "none";
+});
+$("#cron-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const type = $("#cron-type").value;
+  const name = ($("#cron-name").value || "").trim() || `${type}_任务_${Date.now()%10000}`;
+  let cron = "";
+  const freq = $("#cron-freq").value;
+  if (freq === "daily") { const [h,m] = $("#cron-time").value.split(":").map(Number); cron = `${m} ${h} * * *`; }
+  else if (freq === "weekly") { const [h,m] = $("#cron-time-w").value.split(":").map(Number); cron = `${m} ${h} * * ${$("#cron-weekday").value}`; }
+  else { cron = $("#cron-expr").value.trim(); if (!/^[\d*\/,\-\s]+$/.test(cron) || cron.split(/\s+/).length !== 5) { $("#cron-msg").textContent = "cron 格式错误"; return; } }
+  const custom = {};
+  const persona = $("#cron-persona").value.trim(), materials = $("#cron-materials").value.trim(), tags = $("#cron-tags").value.trim();
+  if (persona || materials || tags) {
+    custom.account = {};
+    if (persona) custom.account.persona = persona;
+    if (tags) custom.account.fixed_hashtags = tags.split(/[,，]/).map(t=>t.trim()).filter(Boolean);
+    if (materials) custom.custom_materials = materials.split(/\n|；|;/).map(l => { const [n,...r] = l.split(/[，,：:]/); return { name:(n||"").trim(), detail:r.join("，").trim() }; }).filter(m=>m.name);
+  }
+  const body = { name, cron, type, enabled:true, custom_content: Object.keys(custom).length?custom:null };
+  if (type === "maintain_traffic") {
+    const notes = ($("#cron-notes").value || "").split(/\n/).map(l => l.trim()).filter(Boolean).map(l => {
+      const [platform, url, ...rest] = l.split(/\s+/);
+      const note = { platform, url };
+      if (rest.length) note.topic = rest.join(" ");
+      return note;
+    }).filter(n => n.platform && /^https?:\/\//.test(n.url || ""));
+    if (!notes.length) { $("#cron-msg").textContent = "流量维护请填写作品链接（每行：平台 链接 [主题]）"; return; }
+    body.notes = notes;
+    body.max_replies = parseInt($("#cron-max-replies").value || "10", 10) || 10;
+  }
+  const r = await api("/api/tasks", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
+  $("#cron-msg").textContent = r.ok ? "✓ 已保存，调度器 30 秒内自动生效" : r.message;
+  if (r.ok) { $("#cron-form").reset(); $("#row-traffic").style.display = "none"; loadCronTasks(); }
+});
+async function loadCronTasks() {
+  const data = await api("/api/tasks");
+  const box = $("#cron-list");
+  if (!data.ok) { box.innerHTML = `<div class="tip">${data.message}</div>`; return; }
+  const tasks = data.tasks || {};
+  box.innerHTML = Object.entries(tasks).map(([name, cfg]) => {
+    const tname = cfg.type === "maintain_traffic" ? "流量维护" : cfg.type === "daily_post" ? "每日发帖" : (cfg.type || "内置");
+    const meta = cfg.type === "maintain_traffic" ? ` · ${(cfg.notes||[]).length} 个作品 · 每作品 ${cfg.max_replies||10} 条` : "";
+    return `<div class="acct-cell"><b>${name}</b><span class="chip dim">${tname}</span><span class="tip">${cfg.cron||"?"}${meta}</span><span class="chip ${cfg.enabled===false?'bad':'ok'}">${cfg.enabled===false?'停用':'启用'}</span><button class="danger sm" style="margin-left:auto" onclick="deleteTask('${name}')">删除</button></div>`;
+  }).join("") || '<div class="tip">暂无任务</div>';
+}
+async function deleteTask(name) {
+  if (!confirm(`删除 ${name}？`)) return;
+  const r = await api("/api/tasks/" + encodeURIComponent(name), { method:"DELETE" });
+  alert(r.ok ? "已删除" : r.message);
+  loadCronTasks();
+}
+
+// ============ 实时进度 ============
+async function refreshProgress() {
+  // 找运行中或最近完成的任务
+  const tasks = currentDashboard?.active_tasks || {};
+  const runningTask = Object.entries(tasks).find(([,t]) => t.running);
+  if (!runningTask) {
+    // 检查最近完成的
+    const recentDone = Object.entries(tasks).filter(([,t]) => t.done).slice(-1);
+    if (recentDone.length) {
+      const [name] = recentDone[0];
+      renderTaskProgress(name);
+    } else {
+      $("#progress-content").innerHTML = '<div class="tip">暂无任务。到"任务调度"页触发一个任务。</div>';
+    }
+    // 也加载日志
+    const logs = await api("/api/logs");
+    $("#progress-log").textContent = (logs||[]).slice(-50).join("\n");
+    return;
+  }
+  const [name] = runningTask;
+  renderTaskProgress(name);
+}
+async function renderTaskProgress(name) {
+  const data = await api("/api/task_progress/" + encodeURIComponent(name));
+  if (!data.ok) { $("#progress-content").innerHTML = `<div class="tip">${data.message}</div>`; return; }
+  const steps = data.steps || [];
+  let html = `<div class="acct-cell"><span class="dot ${data.running?'run':(data.error?'bad':'ok')}"></span><div class="name"><b>${name}</b><br><span class="tip">${data.running?'运行中':'已完成'} ${data.error?'· '+data.error:''}</span></div></div>`;
+  html += '<div style="margin-top:12px">';
+  for (const s of steps) {
+    const icon = s.status === "ok" ? "✓" : s.status === "failed" ? "✗" : "◌";
+    const color = s.status === "ok" ? "var(--ok)" : s.status === "failed" ? "var(--bad)" : "var(--run)";
+    const isRunning = data.current_step === s.step && data.running;
+    html += `<div class="timeline-step ${isRunning?'running':''}"><span class="icon" style="color:${color}">${icon}</span><div class="body"><div class="step-name">${s.step}</div><div class="step-detail">${s.detail||""}</div></div></div>`;
+  }
+  html += '</div>';
+  // 日志
+  const logs = await api("/api/logs");
+  $("#progress-log").textContent = (logs||[]).slice(-50).join("\n");
+  $("#progress-content").innerHTML = html;
+}
+
+// ============ 报告日志 ============
+async function refreshLogs() {
+  const reports = await api("/api/reports");
+  const box = $("#reports-list");
+  box.innerHTML = (reports.length ? reports.map(r => {
+    const cls = r.success ? "ok" : "bad";
+    const steps = (r.steps||[]).map(s => `  ${s.status==='ok'?'✓':s.status==='failed'?'✗':'◌'} ${s.step}: ${s.detail||''}`).join("\n");
+    return `<div class="report-item" onclick="this.classList.toggle('expanded')"><span class="chip ${cls}">${r.success?"✓":"✗"}</span> <b>${r.task_name}</b> <span class="tip">${r.started_at}</span><div class="report-detail"><pre>${steps}</pre></div></div>`;
+  }).join("") : '<div class="tip">暂无报告</div>');
+  const logs = await api("/api/logs");
+  $("#log-box").textContent = (logs||[]).join("\n");
+}
+
+// ============ 设置部署 ============
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+function updateSidebarLlm(llm) {
+  const el = $("#llm-badge");
+  if (!el) return;
+  llm = llm || {};
+  el.textContent = llm.active_name
+    ? (llm.ready ? "🟢 " : "🔴 ") + llm.active_name + (llm.active_model ? " · " + llm.active_model : "")
+    : "未配置";
+}
+async function refreshSettings() {
+  const data = await api("/api/deployment");
+  if (!data || data.ok === false || !data.deployment) return;
+  const d = data.deployment || {};
+  $("#settings-deploy").innerHTML = `
+    <div class="acct-cell"><span class="tip" style="min-width:90px">部署模式</span><b class="badge-mode ok">Browser-GUI（容器化）</b></div>
+    <div class="acct-cell"><span class="tip" style="min-width:90px">浏览器守护</span><span>${d.browser_mgr_url || "（未配置）"}</span></div>
+    <div class="acct-cell"><span class="tip" style="min-width:90px">远程桌面</span><span>${d.novnc_url ? `<a href="/remote-desktop" target="_blank">${d.novnc_url}</a>` : "—"}</span></div>
+    <div class="acct-cell"><span class="tip" style="min-width:90px">State 目录</span><span class="tip">${d.state_dir}</span></div>`;
+  // 能力矩阵
+  const platforms = data.platforms || {};
+  const caps = [["image","图文"],["video","视频"],["article","文章"]];
+  let tbl = '<table class="cap-table"><tr><th>平台</th>' + caps.map(([,l]) => `<th>${l}</th>`).join("") + '</tr>';
+  for (const pid of PLATFORM_ORDER) {
+    const p = platforms[pid]; if (!p) continue;
+    const c = p.capabilities || {};
+    tbl += `<tr><td style="text-align:left">${PLATFORM_ICONS[pid]||""} ${p.name}</td>` + caps.map(([k]) => `<td>${c[k]?'<span class="chip ok">✓</span>':'<span class="chip bad">✗</span>'}</td>`).join("") + '</tr>';
+  }
+  tbl += '</table>';
+  $("#settings-caps").innerHTML = tbl;
+  // 部署指南
+  const guide = data.linux_guide || [];
+  $("#guide-content").innerHTML = guide.map(s => `<div class="guide-step">${s.replace(/`([^`]+)`/g, '<code>$1</code>')}</div>`).join("");
+  // 模型与密钥（容器化部署始终显示）
+  renderLlmEditor(d.llm || {}, d.api_keys || {});
+  // 远程桌面（noVNC）密码
+  const vncCard = $("#vnc-card");
+  if (vncCard) vncCard.style.display = "";
+  refreshVncInfo();
+  updateSidebarLlm(d.llm);
+}
+// ---- 模型池编辑器 ----
+const LLM_STATE = { providers: [] };
+function llmRowHTML(p) {
+  return `<div class="acct-cell llm-row" data-id="${esc(p.id)}" style="flex-wrap:wrap">
+    <input class="llm-name" placeholder="名称（如 DeepSeek）" style="flex:1 1 100px;min-width:90px" value="${esc(p.name)}">
+    <input class="llm-base" placeholder="Base URL（OpenAI 兼容）" style="flex:2 1 170px;min-width:160px" value="${esc(p.base_url)}">
+    <input class="llm-model" placeholder="模型名（如 deepseek-chat）" style="flex:1 1 120px;min-width:100px" value="${esc(p.model)}">
+    <input class="llm-key" type="password" autocomplete="new-password" placeholder="${p.has_key ? "•••• 已配置 · 留空保持" : "API Key（不填则此模型不可用）"}" style="flex:1 1 110px;min-width:100px">
+    <button class="danger sm llm-del" title="移除该模型">✕</button>
+  </div>`;
+}
+function collectLlmRows() {
+  const rows = [...document.querySelectorAll("#llm-rows .llm-row")];
+  LLM_STATE.providers = rows.map(r => ({
+    id: r.dataset.id,
+    name: r.querySelector(".llm-name").value.trim(),
+    base_url: r.querySelector(".llm-base").value.trim(),
+    model: r.querySelector(".llm-model").value.trim(),
+    api_key: r.querySelector(".llm-key").value.trim(),
+  }));
+  return LLM_STATE.providers;
+}
+function renderLlmRows() {
+  const rows = $("#llm-rows");
+  rows.innerHTML = LLM_STATE.providers.map(llmRowHTML).join("") || '<div class="tip">暂无模型，点下方「添加模型提供商」</div>';
+  rows.querySelectorAll(".llm-del").forEach((b, i) => b.addEventListener("click", () => {
+    collectLlmRows();
+    if (LLM_STATE.providers.length <= 1) { $("#llm-msg").textContent = "至少保留一个模型提供商"; return; }
+    LLM_STATE.providers.splice(i, 1);
+    renderLlmRows();
+    refreshLlmActiveOptions();
+  }));
+}
+function refreshLlmActiveOptions(prefer) {
+  const sel = $("#llm-active");
+  const prev = prefer || sel.value;
+  sel.innerHTML = LLM_STATE.providers.map(p => `<option value="${esc(p.id)}">${esc(p.name || p.id)} · ${esc(p.model || "?")}</option>`).join("");
+  if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+  else if (LLM_STATE.providers.length) sel.value = LLM_STATE.providers[0].id;
+}
+function renderKeysPlaceholder(apiKeys) {
+  apiKeys = apiKeys || {};
+  const fal = $("#set-fal-key"), stab = $("#set-stab-key");
+  if (fal) fal.placeholder = apiKeys.fal ? "•••• 已配置 · 留空保持" : "fal-xxx…（未配置）";
+  if (stab) stab.placeholder = apiKeys.stability ? "•••• 已配置 · 留空保持" : "sk-xxx…（未配置）";
+}
+function renderLlmEditor(llm, apiKeys) {
+  LLM_STATE.providers = (llm.providers || []).map(p => ({
+    id: p.id, name: p.name || "", base_url: p.base_url || "", model: p.model || "", api_key: "", has_key: !!p.has_key,
+  }));
+  renderLlmRows();
+  refreshLlmActiveOptions(llm.active || "");
+  renderKeysPlaceholder(apiKeys || {});
+}
+async function saveLlmConfig() {
+  const msg = $("#llm-msg");
+  msg.textContent = "保存中…";
+  const providers = collectLlmRows();
+  for (const p of providers) {
+    if (!p.name) p.name = p.id;
+    if (!p.base_url || !p.model) { msg.textContent = "有提供商未填 Base URL 或模型名，请补全后再保存"; return; }
+  }
+  const body = { llm: { providers, active: $("#llm-active").value } };
+  const fal = $("#set-fal-key").value.trim();
+  const stab = $("#set-stab-key").value.trim();
+  if (fal) body.fal_key = fal;
+  if (stab) body.stability_api_key = stab;
+  const r = await api("/api/settings", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
+  if (!r.ok) { msg.textContent = r.message || "保存失败"; return; }
+  msg.textContent = "✓ 已保存并立即生效（后续任务/发布将使用新配置）";
+  $("#set-fal-key").value = ""; $("#set-stab-key").value = "";
+  const fresh = await api("/api/deployment");
+  if (fresh && fresh.ok !== false && fresh.deployment) {
+    const d = fresh.deployment;
+    renderLlmEditor(d.llm || {}, d.api_keys || {});
+    updateSidebarLlm(d.llm);
+  }
+}
+async function refreshVncInfo() {
+  const r = await api("/api/vnc");
+  const cur = $("#vnc-cur"), src = $("#vnc-src"), msg = $("#vnc-msg");
+  if (!r.ok) {
+    if (msg) msg.textContent = r.message || "无法读取远程桌面密码";
+    return;
+  }
+  if (cur) cur.value = r.password || "（未知，可先修改为新密码）";
+  if (src) src.textContent = r.source === "env" ? "来自 .env（修改后将转为 WebUI 持久保存）"
+    : r.source === "auto" ? "容器入口随机生成" : r.source === "webui" ? "本面板保存" : (r.source || "");
+  if (msg) msg.textContent = "";
+}
+$("#vnc-save")?.addEventListener("click", async () => {
+  const pw = ($("#vnc-new").value || "").trim();
+  const msg = $("#vnc-msg");
+  if (pw.length < 6) { if (msg) msg.textContent = "密码至少 6 位"; return; }
+  const btn = $("#vnc-save");
+  btn.disabled = true;
+  const r = await api("/api/vnc/password", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ password: pw }) });
+  btn.disabled = false;
+  if (r.ok) {
+    if (msg) msg.textContent = "✓ 已保存并生效：noVNC 下次连接请使用新密码";
+    $("#vnc-new").value = "";
+    refreshVncInfo();
+  } else {
+    if (msg) msg.textContent = r.message || "保存失败";
+  }
+});
+$("#btn-add-provider")?.addEventListener("click", () => {
+  collectLlmRows();
+  LLM_STATE.providers.push({ id: "prov" + Date.now().toString().slice(-6), name: "", base_url: "", model: "", api_key: "", has_key: false });
+  renderLlmRows();
+  refreshLlmActiveOptions();
+});
+$("#btn-save-llm")?.addEventListener("click", saveLlmConfig);
+// 修复设置页折叠
+$("#guide-toggle")?.addEventListener("click", function() {
+  this.nextElementSibling.classList.toggle("on");
+  this.textContent = this.nextElementSibling.classList.contains("on") ? "▾ Linux 部署指南" : "▸ Linux 部署指南";
+});
+
+// ============ 内容发布 ============
+function updatePublishAccounts() {
+  const sel = $("#pub-platform");
+  if (!sel.options.length) {
+    sel.innerHTML = PLATFORM_ORDER.map(p => `<option value="${p}">${PLATFORM_ICONS[p]} ${PLATFORM_NAMES[p]}</option>`).join("");
+  }
+  // 更新账号下拉
+  const platform = sel.value;
+  const accounts = (currentStatus?.platforms?.[platform]?.accounts || []).map(a => `<option value="${a.profile}">${a.profile}${a.logged_in?' ✓':''}</option>`).join("");
+  $("#pub-profile").innerHTML = '<option value="">默认</option>' + accounts;
+  // 按能力过滤字段
+  const caps = currentStatus?.platforms?.[platform]?.capabilities || {};
+  $("#pub-images-row").style.display = caps.image ? "flex" : "none";
+  $("#pub-video-row").style.display = caps.video ? "flex" : "none";
+}
+$("#pub-platform")?.addEventListener("change", updatePublishAccounts);
+$("#publish-form")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData();
+  fd.append("platform", $("#pub-platform").value);
+  fd.append("profile", $("#pub-profile").value);
+  fd.append("title", $("#pub-title").value);
+  fd.append("content", $("#pub-content").value);
+  fd.append("tags", $("#pub-tags").value);
+  fd.append("visibility", $("#pub-visibility").value);
+  for (const f of $("#pub-images").files) fd.append("images", f);
+  if ($("#pub-video").files[0]) fd.append("video", $("#pub-video").files[0]);
+  $("#pub-msg").textContent = "发布中…";
+  const r = await fetch("/api/publish", { method:"POST", body: fd });
+  const result = await r.json();
+  $("#pub-msg").textContent = result.ok ? "✓ 已提交" : result.message;
+});
+
+// ---- 一键模拟测试发布（无 AI / 无 Key） ----
+function updateMockAccounts() {
+  const sel = $("#mock-platform");
+  if (!sel) return;
+  if (!sel.options.length) {
+    sel.innerHTML = PLATFORM_ORDER.map(p => `<option value="${p}">${PLATFORM_ICONS[p]} ${PLATFORM_NAMES[p]}</option>`).join("");
+  }
+  const platform = sel.value;
+  const accounts = (currentStatus?.platforms?.[platform]?.accounts) || [];
+  $("#mock-profile").innerHTML = '<option value="">默认</option>' + accounts.map(a =>
+    `<option value="${a.profile}">${a.profile}${a.logged_in ? " ✓已登录" : "（未登录）"}</option>`).join("");
+}
+$("#mock-platform")?.addEventListener("change", updateMockAccounts);
+$("#btn-mock-fill")?.addEventListener("click", async () => {
+  const platform = $("#mock-platform").value;
+  const r = await api("/api/mock_draft", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ platform }) });
+  if (!r.ok) { $("#mock-msg").textContent = r.message; return; }
+  // 同步到手动发布表单（含平台/账号选择），方便先审阅再手动发布
+  $("#pub-platform").value = platform;
+  updatePublishAccounts();
+  $("#pub-title").value = r.title;
+  $("#pub-content").value = r.content;
+  $("#pub-tags").value = (r.tags || []).join(",");
+  const mp = $("#mock-profile").value;
+  const opts = [...$("#pub-profile").options];
+  const hit = opts.find(o => o.value === mp || (mp === "" && o.value === ""));
+  if (hit) $("#pub-profile").value = hit.value;
+  $("#mock-msg").textContent = "✓ 已生成模拟文案并填入上方表单（也可直接点击右侧按钮测试发布）";
+});
+$("#btn-mock-publish")?.addEventListener("click", async () => {
+  const platform = $("#mock-platform").value;
+  const profile = $("#mock-profile").value;
+  const visibility = $("#mock-visibility").value;
+  const r = await api("/api/mock_publish", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ platform, profile, visibility }) });
+  $("#mock-msg").textContent = r.ok ? "✓ 已提交模拟测试发布，见右侧「发布状态」实时进度" : r.message;
+  if (r.ok) refreshPublish();
+});
+async function refreshPublish() {
+  const data = await api("/api/publish_status");
+  const tagOf = s => (s === "mock" || (s || "").startsWith("mock_")) ? '<span class="chip accent">模拟测试</span>' : '<span class="chip dim">手动</span>';
+  // 活跃
+  const active = Object.values(data.active || {});
+  $("#pub-active").innerHTML = active.length ? active.map(a => `<div class="acct-cell"><span class="dot run"></span><div class="name">${a.platform}/${a.profile||'默认'} ${tagOf(a.source||a.key)}${a.title?`<br><span class="tip">${a.title}</span>`:''}<br><span class="tip">${a.status}: ${a.message||''}</span></div></div>`).join("") : '<div class="tip">无活跃发布</div>';
+  // 历史
+  const recent = data.recent || [];
+  $("#pub-recent").innerHTML = recent.length ? recent.map(r => `<div class="acct-cell"><span class="chip ${r.status==='published'?'ok':'bad'}">${r.status}</span><div class="name">${r.platform}/${r.profile||'默认'} ${r.source?tagOf(r.source):''}${r.title?`<br><span class="tip">${r.title}</span>`:''}<br><span class="tip">${r.message||''}</span></div></div>`).join("") : '<div class="tip">暂无历史</div>';
+}
+
+// ============ AI 运营工坊 ============
+const ST_PLATS = PLATFORM_ORDER.filter(p => p !== "zhihu");
+let stPresets = [];
+let stPacks = [];
+let stMedia = { styles:[], backgrounds:[], music:[] };
+let stPack = null;
+let stPackId = "";
+let stJobTimer = null;
+let stBusy = false;
+let stSelBgKind = "style";           // style | image
+let stSelBgKey = "";                 // 背景风格 id 或上传文件名
+let stSelMusic = "";                 // BGM 文件名
+const stAudio = new Audio();
+const stFreq = document.getElementById("st-freq") || null;
+const stWeekday = document.getElementById("st-weekday") || null;
+
+function stTag(s){ return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
+function stMusicMeta(file){ return (stMedia.music || []).find(m => m.file === file) || null; }
+
+function openStudio() {
+  if (!stMedia.styles.length && !stPresets.length) {
+    api("/api/studio/media?t=1").then(r => { stMedia = r.data || stMedia; if (!stPresets.length) loadStudioPresets(); renderStudioUI(); });
+  } else {
+    loadStudioPacks();
+    refreshStudioMedia();
+    renderStudioUI();
+  }
+}
+async function loadStudioPresets(){
+  try { const r = await api("/api/studio/presets"); stPresets = (r.data || []); } catch(e) { stPresets = []; }
+}
+function renderPresetChips(){
+  const el = $("#st-presets"); if (!el) return;
+  el.innerHTML = stPresets.map((p, i) => `<span class="chip dim" style="cursor:pointer" onclick="fillPreset(${i})">${stTag(p.label)}</span>`).join("");
+}
+function fillPreset(i){
+  const p = stPresets[i]; if (!p) return;
+  $("#st-brief").value = p.brief;
+  $("#st-goal").value = "";
+  $("#st-msg").textContent = "已填充「" + p.label + "」，可再改一改";
+}
+function renderPlatformChips(){
+  const el = $("#st-plat"); if (!el) return;
+  el.innerHTML = ST_PLATS.map(p =>
+    `<label style="display:inline-flex;align-items:center;gap:4px;margin-right:10px;font-size:13px;cursor:pointer"><input type="checkbox" value="${p}" ${(p==="douyin"||p==="xiaohongshu")?"checked":""}> ${PLATFORM_ICONS[p]||""} ${PLATFORM_NAMES[p]||p}</label>`).join("");
+}
+function checkedPlats(){
+  return [...document.querySelectorAll('#st-plat input:checked')].map(i => i.value);
+}
+
+async function genPack(){
+  if (stBusy) return;
+  const brief = $("#st-brief").value.trim();
+  if (!brief) { $("#st-msg").textContent = "请先填写一句话需求"; return; }
+  stBusy = true;
+  $("#btn-st-generate").disabled = true;
+  $("#btn-st-reg").style.display = "none";
+  $("#st-msg").textContent = "AI 策划中…通常需要 20~60 秒，请耐心等待";
+  try {
+    const r = await api("/api/studio/generate", { method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ brief, goal: $("#st-goal").value, platforms: checkedPlats() }) });
+    if (!r.ok || !r.job) { $("#st-msg").textContent = r.message || "生成失败"; return; }
+    await pollJob(r.job);
+  } catch (e) {
+    $("#st-msg").textContent = "请求失败：" + e.message;
+  } finally {
+    stBusy = false;
+    $("#btn-st-generate").disabled = false;
+    $("#btn-st-reg").style.display = stPack ? "" : "none";
+  }
+}
+function pollJob(jobId){
+  return new Promise((resolve, reject) => {
+    const tick = async () => {
+      try {
+        const r = await api("/api/studio/job/" + jobId);
+        if (!r.ok) { $("#st-msg").textContent = r.message; reject(new Error(r.message)); return; }
+        if (r.status === "done") { setPack(r.result, true); $("#st-msg").textContent = "✓ 定制包已生成，已自动存入「定制包库」"; resolve(); }
+        else if (r.status === "error") { $("#st-msg").textContent = "生成失败：" + (r.error || "未知错误"); reject(new Error(r.error)); }
+        else stJobTimer = setTimeout(tick, 1500);
+      } catch (e) { reject(e); }
+    };
+    tick();
+  });
+}
+function setPack(pack, saveLib){
+  stPack = pack;
+  const ms = (pack.media_style || {});
+  const tname = (pack.pack_name || "我的定制包").replace(/[\s\/]+/g, "-").slice(0, 24);
+  if (!$("#st-task-name").value.trim()) $("#st-task-name").value = tname;
+  if (stSelBgKind === "image") stSelBgKind = "style";
+  stSelBgKey = ms.bg_style || "aurora";
+  stSelMusic = "";   // BGM 一律用用户上传的音乐；未选择则无声
+  stPackId = stPackId || "pk" + Date.now().toString(36);
+  renderPackSummary();
+  renderScheduleSel();
+  $("#st-result-card").style.display = "";
+  $("#st-schedule-card").style.display = "";
+  if (saveLib) savePackLib();
+}
+function renderPackSummary(){
+  const el = $("#st-summary"); if (!el || !stPack) return;
+  $("#st-packname").textContent = stPack.pack_name || "";
+  const p = stPack;
+  const a = p.account || {};
+  const ms = p.media_style || {};
+  const pub = p.publishing || {};
+  const mat = (p.custom_materials || []);
+  const col = (p.columns || []);
+  const html = `
+    <div class="acct-cell"><span class="tip" style="min-width:70px">人设</span><b>${stTag(a.persona)}</b></div>
+    <div class="acct-cell"><span class="tip" style="min-width:70px">口吻</span><span>${stTag(a.tone)}</span></div>
+    <div class="acct-cell"><span class="tip" style="min-width:70px">标签</span><span>${(a.fixed_hashtags||[]).map(x=>`<span class="chip dim">${stTag(x)}</span>`).join(" ")||"—"}</span></div>
+    <div class="acct-cell"><span class="tip" style="min-width:70px">栏目</span><span>${col.map(c=>`<span class="chip accent">${stTag(c.name)}</span>`).join(" ")||"—"}</span></div>
+    <div class="acct-cell"><span class="tip" style="min-width:70px">素材库</span><span class="tip">${mat.length} 条可复用要点，示例：</span></div>
+    <ul style="margin:0 0 6px 26px;padding:0;font-size:13px">${mat.slice(0,3).map(m=>`<li>【${stTag(m.type)}】${stTag((m.name||"").slice(0,40))}</li>`).join("")}</ul>
+    <div class="acct-cell"><span class="tip" style="min-width:70px">视觉建议</span><span>${stTag(ms.bg_reason || "")}${ms.music_vibe && ms.music_vibe!=="none" ? " · 配乐倾向「" + stTag(ms.music_vibe) + "」" : ""}</span></div>
+    <div class="acct-cell"><span class="tip" style="min-width:70px">发布建议</span><span>${stTag((pub.cadence||"") + " ｜ " + (pub.best_times||[]).join(" / "))}</span></div>
+    <div class="acct-cell"><span class="tip" style="min-width:70px">合规红线</span><span class="tip">${(p.compliance||[]).map(stTag).join("；")||"—"}</span></div>`;
+  el.innerHTML = html;
+  $("#st-json").value = JSON.stringify(stPack, null, 2);
+}
+function renderStudioUI(){
+  renderPresetChips();
+  renderPlatformChips();
+  renderAssets();
+  renderScheduleSel();
+  if (!stPresets.length) loadStudioPresets().then(renderPresetChips);
+  loadStudioPacks();
+}
+function renderAssets(){
+  const el = $("#st-assets"); if (!el) return;
+  let html = `
+    <div class="form-row" style="align-items:flex-start">
+      <label style="min-width:70px;padding-top:4px">上传素材</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <label class="ghost-btn-sm" style="cursor:pointer">+ 背景图<input type="file" id="st-upload-bg" accept="image/*" style="display:none"></label>
+        <label class="ghost-btn-sm" style="cursor:pointer">+ 音乐(BGM)<input type="file" id="st-upload-music" accept="audio/*,.mp3,.m4a,.wav,.aac" style="display:none"></label>
+        <span class="tip" style="padding-top:4px">上传后存在共享素材库，建任务时直接选用</span>
+      </div>
+    </div>`;
+  // 内置背景模板
+  html += `<div class="tip" style="margin:6px 0 4px">内置背景模板（AI 会按行业推荐，任务里可换）</div><div class="bg-grid">`;
+  html += (stMedia.styles||[]).map(s => `<div class="bg-tile" title="${stTag(s.desc)}"><img src="/api/studio/bg-preview?style=${encodeURIComponent(s.id)}" alt="" loading="lazy"><div>${stTag(s.name)}</div></div>`).join("");
+  html += `</div>`;
+  // 已上传背景
+  if ((stMedia.backgrounds||[]).length) {
+    html += `<div class="tip" style="margin:10px 0 4px">已上传背景图</div><div class="bg-grid">`;
+    html += stMedia.backgrounds.map(b => `<div class="bg-tile"><img src="/api/studio/file/backgrounds/${encodeURIComponent(b.file)}" alt="" loading="lazy"><div>${stTag(b.file)} <a href="javascript:;" class="x-del" onclick="delMedia('backgrounds','${encodeURIComponent(b.file)}',event)" title="删除">✕</a></div></div>`).join("");
+    html += `</div>`;
+  }
+  // 音乐（仅用户上传；未上传则任务按无声视频处理）
+  html += `<div class="tip" style="margin:10px 0 4px">配乐库（上传 mp3/m4a/wav/aac 后可选作视频 BGM）</div>`;
+  html += (stMedia.music||[]).map(m => {
+    return `<div class="mu-row" style="cursor:default"><span class="chip dim">上传</span><span>🎵 ${stTag(m.name||m.file)}</span>
+      <a href="javascript:;" class="ghost-btn-sm" onclick="togglePlay('${encodeURIComponent(m.file)}', event)">▶ 试听</a>
+      <a href="javascript:;" class="x-del" onclick="delMedia('music','${encodeURIComponent(m.file)}',event)">✕</a>
+      <span class="tip" style="margin-left:auto">${(m.size/1024/1024).toFixed(1)} MB</span></div>`;
+  }).join("") || `<div class="tip">还没有音乐。点上方「+ 音乐(BGM)」上传；未选音乐的任务将发布无声视频。</div>`;
+  html += `<div class="tip" style="margin-top:6px">💡 平台发布页里仍可直接选用平台热门音乐；这里上传的 BGM 用于本地合成视频/备份。</div>`;
+  el.innerHTML = html;
+}
+function renderScheduleSel(){
+  const bg = $("#st-bg"); const mu = $("#st-music"); if (!bg || !mu) return;
+  // 背景选择：内置风格 + 已上传图
+  let html = "";
+  (stMedia.styles||[]).forEach(s => {
+    const sel = stSelBgKind === "style" && stSelBgKey === s.id;
+    html += `<div class="bg-tile ${sel?"sel":""}" onclick="pickBg('style','${s.id}')" title="${stTag(s.desc)}"><img src="/api/studio/bg-preview?style=${encodeURIComponent(s.id)}" alt="" loading="lazy"><div>${stTag(s.name)}${sel?" ✓":""}</div></div>`;
+  });
+  (stMedia.backgrounds||[]).forEach(b => {
+    const sel = stSelBgKind === "image" && stSelBgKey === b.file;
+    html += `<div class="bg-tile ${sel?"sel":""}" onclick="pickBg('image','${encodeURIComponent(b.file)}')"><img src="/api/studio/file/backgrounds/${encodeURIComponent(b.file)}" alt="" loading="lazy"><div>我的图${sel?" ✓":""}</div></div>`;
+  });
+  bg.innerHTML = html || '<span class="tip">背景模板加载中…</span>';
+  // 音乐选择（用户上传的才是可选项，默认「无音乐」）
+  let mhtml = `<div class="mu-row ${stSelMusic===""?"sel":""}" onclick="pickMusic('')"><span>${stSelMusic===""?"✓":""} 无音乐</span><span class="tip">发布无声视频</span></div>`;
+  (stMedia.music||[]).forEach(m => {
+    const sel = stSelMusic === m.file;
+    mhtml += `<div class="mu-row ${sel?"sel":""}" onclick="pickMusic('${encodeURIComponent(m.file)}')">
+      <span>${sel?"✓":""} 🎵 ${stTag(m.name||m.file)}</span>
+      <span class="tip">我的音乐</span>
+      <a href="javascript:;" class="ghost-btn-sm" onclick="togglePlay('${encodeURIComponent(m.file)}', event)">${stSelMusic===m.file?"🎧 试听":"▶ 试听"}</a></div>`;
+  });
+  mu.innerHTML = mhtml || '<span class="tip">音乐列表加载中…</span>';
+}
+function pickBg(kind, key){
+  stSelBgKind = kind; stSelBgKey = decodeURIComponent(key);
+  renderScheduleSel();
+}
+function pickMusic(file){
+  stSelMusic = decodeURIComponent(file);
+  stAudio.pause();
+  renderScheduleSel();
+}
+function togglePlay(file, ev){
+  ev.stopPropagation();
+  const f = decodeURIComponent(file);
+  if (!stAudio.paused && stAudio.dataset.file === f) { stAudio.pause(); return; }
+  stAudio.dataset.file = f;
+  stAudio.src = "/api/studio/file/music/" + encodeURIComponent(f) + "?t=" + Date.now();
+  stAudio.play().catch(() => {});
+}
+async function delMedia(kind, fileEnc, ev){
+  if (ev && ev.stopPropagation) ev.stopPropagation();
+  if (!fileEnc) return;
+  const name = decodeURIComponent(fileEnc);
+  if (!confirm("确定删除素材「" + name + "」？")) return;
+  const r = await api("/api/studio/file?kind=" + kind + "&name=" + encodeURIComponent(name), { method:"DELETE" });
+  if (r && r.ok) { await refreshStudioMedia(); renderAssets(); renderScheduleSel(); }
+  else alert((r && r.message) || "删除失败");
+}
+async function refreshStudioMedia(){
+  try {
+    const r = await api("/api/studio/media?t=" + Date.now());
+    if (r && r.ok) stMedia = r.data || stMedia;
+  } catch(e) {}
+}
+function stScheduleBody(){
+  const freq = $("#st-freq").value;
+  let cron;
+  if (freq === "custom") cron = $("#st-cron").value.trim();
+  else {
+    const t = (freq === "weekly" ? $("#st-time-w").value : $("#st-time").value) || "10:30";
+    const [hh, mm] = t.split(":").map(x => String(parseInt(x, 10) || 0));
+    cron = freq === "weekly" ? `${mm} ${hh} * * ${$("#st-weekday").value}` : `${mm} ${hh} * * *`;
+  }
+  // BGM：只用用户上传的音乐文件（空 = 无音乐，发布无声视频）
+  const opts = {
+    platforms: checkedPlats(),
+    drafts: parseInt($("#st-drafts").value || "3", 10) || 3,
+    visibility: "private",
+    mode: "slideshow",
+    image_count: 4,
+    music_file: stSelMusic || "",
+  };
+  if (stSelBgKind === "image") opts.bg_file = stSelBgKey; else opts.bg_style = stSelBgKey;
+  return { cron, opts };
+}
+async function stSaveTask(runNow){
+  if (!stPack) { $("#st-sched-msg").textContent = "请先生成定制包"; return; }
+  const name = $("#st-task-name").value.trim();
+  if (!name || /\s|\//.test(name)) { $("#st-sched-msg").textContent = "请给任务起个名（不能含空格或/）"; return; }
+  const { cron, opts } = stScheduleBody();
+  if (!cron || cron.split(" ").length !== 5) { $("#st-sched-msg").textContent = "cron 格式不对（需要 5 段）"; return; }
+  $("#st-sched-msg").textContent = "保存中…";
+  const r = await api("/api/studio/schedule", { method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ name, cron, pack: stPack, options: opts, enabled: true }) });
+  if (!r.ok) { $("#st-sched-msg").textContent = r.message || "保存失败"; return; }
+  if (runNow) {
+    $("#st-sched-msg").textContent = "✓ 已保存并触发，进入实时进度…";
+    const rr = await api("/api/run", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ task: name }) });
+    if (rr && rr.ok) { setTimeout(() => switchView("progress"), 900); return; }
+    $("#st-sched-msg").textContent = (rr && rr.message) || "已保存，立即执行触发失败";
+  } else {
+    $("#st-sched-msg").textContent = "✓ 任务已保存并排入调度器（30 秒内自动生效），可在「任务调度」查看";
+  }
+  loadStudioPacks();
+}
+function stNameForPack(){
+  return $("#st-task-name").value.trim();
+}
+async function savePackLib(){
+  if (!stPack) return;
+  try {
+    await api("/api/studio/packs", { method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ id: stPackId, name: stPack.pack_name || "定制包", brief: $("#st-brief").value,
+        goal: $("#st-goal").value, platforms: checkedPlats(), pack: stPack }) });
+    loadStudioPacks();
+  } catch(e) {}
+}
+async function loadStudioPacks(){
+  try {
+    const r = await api("/api/studio/packs");
+    stPacks = (r && r.data) || [];
+  } catch(e) { stPacks = []; }
+  const el = $("#st-packs"); if (!el) return;
+  if (!stPacks.length) { el.innerHTML = '<div class="tip">暂无定制包，先生成一个吧</div>'; return; }
+  el.innerHTML = stPacks.map(p => `<div class="acct-cell" style="padding:10px 12px">
+    <div class="name">${stTag(p.name||"未命名")} <span class="chip accent">${stTag((p.platforms||[]).map(x=>PLATFORM_NAMES[x]||x).join(" / ")||"—")}</span></div>
+    <span class="tip">${stTag((p.brief||"").slice(0,60))}</span>
+    <div style="margin-top:6px;display:flex;gap:6px">
+      <button class="ghost sm" onclick="usePack('${p.id}')">使用</button>
+      <button class="ghost sm" onclick="delPack('${p.id}')">删除</button>
+    </div></div>`).join("");
+}
+function usePack(id){
+  const p = stPacks.find(x => x.id === id);
+  if (!p || !p.pack) return;
+  stPackId = id;
+  $("#st-task-name").value = "";
+  stSelBgKind = "image"; stSelBgKey = "";
+  setPack(JSON.parse(JSON.stringify(p.pack)), false);
+  $("#st-result-card").style.display = "";
+  $("#st-schedule-card").style.display = "";
+  $("#st-msg").textContent = "已载入定制包「" + (p.name||"") + "」，可调整后一键调度";
+  $("#btn-st-reg").style.display = "";
+}
+async function delPack(id){
+  const r = await api("/api/studio/packs/" + id, { method:"DELETE" });
+  loadStudioPacks();
+}
+// 上传素材（事件委托，渲染重建后依然有效）
+document.addEventListener("change", (e) => {
+  const el = e.target;
+  if (el.id === "st-upload-bg" || el.id === "st-upload-music") {
+    const kind = el.id === "st-upload-bg" ? "backgrounds" : "music";
+    const f = el.files && el.files[0];
+    if (!f) return;
+    const fd = new FormData();
+    fd.append("kind", kind); fd.append("file", f);
+    api("/api/studio/upload", { method:"POST", body: fd }).then(async r => {
+      if (!r || !r.ok) { alert((r && r.message) || "上传失败"); return; }
+      await refreshStudioMedia();
+      renderAssets(); renderScheduleSel();
+    });
+    el.value = "";
+  }
+});
+// 事件绑定（一次性）
+document.getElementById("btn-st-generate")?.addEventListener("click", genPack);
+document.getElementById("btn-st-reg")?.addEventListener("click", genPack);
+document.getElementById("btn-st-apply")?.addEventListener("click", () => {
+  try { stPack = JSON.parse($("#st-json").value); renderPackSummary(); renderScheduleSel(); $("#st-json-msg").textContent = "✓ 已应用 JSON 修改"; }
+  catch(e) { $("#st-json-msg").textContent = "JSON 格式有误：" + e.message; }
+});
+document.getElementById("btn-st-save")?.addEventListener("click", () => stSaveTask(false));
+document.getElementById("btn-st-run")?.addEventListener("click", () => stSaveTask(true));
+document.getElementById("st-freq")?.addEventListener("change", () => {
+  const f = $("#st-freq").value;
+  $("#st-row-time").style.display = f === "daily" ? "flex" : "none";
+  $("#st-row-week").style.display = f === "weekly" ? "flex" : "none";
+  $("#st-row-custom").style.display = f === "custom" ? "flex" : "none";
+});
+$("#st-row-custom").style.display = "none";
+$("#st-row-week").style.display = "none";
+
+// ============ 登录账号（安全） ============
+async function initAuthUser() {
+  try {
+    const r = await api("/api/auth/info");
+    if (!r || !r.ok) return;
+    const label = "👤 " + (r.user || "admin");
+    const top = $("#auth-user");
+    if (top) top.textContent = label;
+    const u = $("#auth-username");
+    if (u) u.textContent = label;
+    const s = $("#auth-source");
+    if (s) s.textContent = r.source === "env" ? "（来自 .env）"
+      : r.source === "auto" ? "（首次启动随机生成，建议立即修改）" : "";
+  } catch (e) { /* 401 时已由 api() 跳转登录页 */ }
+}
+async function logoutMe() {
+  try { await api("/api/session/logout", { method: "POST" }); } catch (e) { /* 忽略 */ }
+  window.location.href = "/login";
+}
+$("#auth-save")?.addEventListener("click", async () => {
+  const oldP = ($("#auth-old").value || "").trim();
+  const newP = ($("#auth-new").value || "").trim();
+  const msg = $("#auth-msg");
+  if (!oldP) { if (msg) msg.textContent = "请输入当前密码"; return; }
+  if (newP.length < 8) { if (msg) msg.textContent = "新密码至少 8 位"; return; }
+  const btn = $("#auth-save"); btn.disabled = true;
+  const r = await api("/api/auth/password", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ old_password: oldP, new_password: newP }) });
+  btn.disabled = false;
+  if (msg) msg.textContent = r.message || (r.ok ? "已修改" : "修改失败");
+  if (r.ok) { $("#auth-old").value = ""; $("#auth-new").value = ""; initAuthUser(); }
+});
+
+// ============ 轮询 ============
+initAuthUser();
+initNewAccount();
+refreshDashboard();
+refresh();
+// 仪表盘/矩阵：低频轮询（登录态检测是串行+缓存的，点「⟳ 检测」才即时重查）
+setInterval(() => {
+  if (currentView === "dashboard") refreshDashboard();
+  if (currentView === "matrix") refresh();
+}, 10000);
+// 发布/进度：需要实时刷新，单独高频
+setInterval(() => {
+  if (currentView === "progress" && hasActiveTasks()) refreshProgress();
+  if (currentView === "publish") refreshPublish();
+}, 3000);
+function hasActiveTasks() {
+  return Object.values(currentDashboard?.active_tasks || {}).some(t => t.running);
+}
+</script>
+</body>
+</html>
