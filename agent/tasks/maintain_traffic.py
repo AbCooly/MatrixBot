@@ -47,13 +47,20 @@ class MaintainTrafficTask(Task):
             return self._finish(report)
 
         total_replied = 0
-        for note in notes:
+        for idx, note in enumerate(notes):
             platform = str(note.get("platform") or "").strip()
             url = str(note.get("url") or "").strip()
             topic = str(note.get("topic") or note.get("title") or "").strip()
             if not platform or not url:
                 log.warning("[maintain_traffic] 跳过无效作品配置: %s", note)
                 continue
+            # 巡检目标之间随机间隔：流量维护通常是"上班路上看看留言"，逐条处理之间
+            # 本就会翻一翻上下文；固定 0 间隔连续处理多个作品同样是机器节奏。
+            if idx > 0:
+                await self._random_gap(
+                    cfg, "note_gap", 15.0, 90.0,
+                    why=f"上一个作品 → {url} 巡检错峰",
+                )
             detail = "用 AI 定制人设巡检并回复 " + url + (f"（主题：{topic}）" if topic else "")
             result = await self.safe_step(
                 report, f"reply_{platform}",

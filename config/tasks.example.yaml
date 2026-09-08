@@ -8,7 +8,8 @@ tasks:
   # 每日自动发帖示例 —— 默认停用，改好账号与文案再打开
   daily_post:
     enabled: false            # 改好配置后再置为 true
-    cron: 0 9 * * *           # 每天 09:00
+    cron: 0 9 * * *           # 每天 09:00 触发（配合 jitter_seconds 打散到 09:00~09:15 随机）
+    jitter_seconds: "0-900"   # 触发后随机延迟 0~900s，避免每天都精确整点启动的机器节奏（可设 0 关闭）
     platforms:
     - xiaohongshu             # 支持的平台见 docs/API.md / WebUI
     - douyin
@@ -16,6 +17,8 @@ tasks:
     visibility: private
     mode: slideshow           # image: 单图文 | slideshow: 多图+文字+可选BGM合成视频
     image_count: 4
+    # 同一次任务连发多平台时，平台间随机错峰（秒 / "min-max"），避免同 IP 秒级连发多平台
+    platform_gap: "180-600"
     accounts:
       xiaohongshu: []         # 填你在 WebUI「账号矩阵」里建的账号名，例如 [主号]
       douyin: []
@@ -23,8 +26,10 @@ tasks:
   # 流量维护（自动回复评论）示例 —— 默认停用，填好作品链接再打开
   maintain_traffic:
     enabled: false            # 改好配置后再置为 true
-    cron: '*/30 8-23 * * *'   # 每 30 分钟巡检一次
+    cron: '*/30 8-23 * * *'   # 每 30 分钟巡检一次（jitter 打散到 x:x0~x:x8 之间）
+    jitter_seconds: 480       # 触发后随机延迟 0~480s，避免严格每半小时整点
     max_replies: 10           # 每个作品本次最多回复多少条
+    note_gap: "20-120"        # 两个巡检作品之间的随机间隔（秒）
     notes:                    # 要巡检并回复的作品，格式：平台 链接 [主题]
     - platform: xiaohongshu
       url: https://www.xiaohongshu.com/explore/你的笔记ID

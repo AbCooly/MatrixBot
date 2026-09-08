@@ -55,7 +55,14 @@ class DailyPostTask(Task):
         topics = (trends.data if trends and trends.success else None) or []
 
         # 2-3) 文案生成 + 自审择优（每平台独立进行，注入定制化内容）
-        for platform in platforms:
+        for idx, platform in enumerate(platforms):
+            # 平台间错峰：同一任务连发多平台时先随机间隔（避免同 IP 数秒内多平台发文
+            # 这种强关联指纹）。配置项 platform_gap（秒 / "min-max"），默认 180~900s。
+            if idx > 0:
+                await self._random_gap(
+                    cfg, "platform_gap", 180.0, 900.0,
+                    why=f"{platforms[idx-1]} → {platform} 发布错峰",
+                )
             # 多账号轮换：本平台今天的发布账号
             profile = self._pick_account(platform, accounts_cfg.get(platform), ctx.settings.state_dir)
             account_tag = f"/{profile}" if profile else ""

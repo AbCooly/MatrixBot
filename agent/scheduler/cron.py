@@ -36,6 +36,41 @@ def parse_cron(expr: str) -> dict:
     }
 
 
+def parse_jitter(value) -> int | None:
+    """解析任务配置里的触发抖动（秒）。
+
+    支持形式：
+      - 整数：固定抖动上限（APScheduler 会在触发点后随机延迟 0~N 秒）
+      - "min-max"：字符串区间，随机取一个值作为本次抖动量
+    返回 None 表示不抖动。
+    """
+    import random
+
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        n = int(value)
+        return n if n > 0 else None
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        if "-" in s:
+            try:
+                lo, hi = (int(x.strip()) for x in s.split("-", 1))
+            except ValueError:
+                return None
+            return max(0, random.randint(lo, hi))
+        try:
+            n = int(s)
+        except ValueError:
+            return None
+        return n if n > 0 else None
+    return None
+
+
 class Scheduler:
     """任务调度器：加载 tasks.yaml，注册 Task 并常驻运行。"""
 
@@ -141,12 +176,20 @@ class Scheduler:
             except ValueError as exc:
                 log.error("任务 [%s] cron 配置错误: %s", name, exc)
                 continue
-            task_config = {k: v for k, v in cfg.items() if k not in ("cron", "enabled", "type")}
+            # 触发抖动：APScheduler cron 原生支持 jitter（触发点后随机延迟 0~N 秒），
+            # 打散"每天整点/每 30 分钟整点"这种一眼机器的节奏
+            jitter = parse_jitter(cfg.get("jitter_seconds"))
+            task_config = {
+                k: v for k, v in cfg.items()
+                if k not in ("cron", "enabled", "type", "jitter_seconds")
+            }
             scheduler.add_job(
                 self._run_task, trigger="cron", args=[name, task, task_config], **trigger_args,
                 id=name, replace_existing=True, misfire_grace_time=300,
+                jitter=jitter or 0,
             )
-            log.info("已排程 [%s] cron=%s type=%s", name, cron_expr, cfg.get("type", "内置"))
+            log.info("已排程 [%s] cron=%s type=%s jitter=%s",
+                     name, cron_expr, cfg.get("type", "内置"), f"{jitter}s" if jitter else "无")
             scheduled += 1
         log.info("任务计划已刷新：共 %d 个定时任务", scheduled)
 
