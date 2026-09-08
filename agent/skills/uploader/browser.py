@@ -29,6 +29,31 @@ if TYPE_CHECKING:
 # 本进程持有浏览器期间定期向守护续租，防止被闲置回收/淘汰。
 HB_INTERVAL_S = 45.0
 
+# 页面级“自动化痕迹”遮蔽（纵深防御）：
+# 本架构的 Chromium 由守护进程手动拉起（非 playwright.launch），navigator.webdriver
+# 本来就是 false；此脚本主要防“会话中途被注入/被二次导航”这类场景，并顺手抹掉
+# 自动化构造器残留标记，降低被页面脚本直接读取判定的概率。
+_STEALTH_JS = """() => {
+  try {
+    const defGet = (obj, prop, val) => {
+      try { Object.defineProperty(obj, prop, { get: () => val, configurable: true }); }
+      catch (e) {}
+    };
+    // 1) webdriver 标记：真实 Chrome 里它是 false，杜绝任何渠道被置 true
+    try { if (window.navigator.webdriver !== false) defGet(window.navigator, 'webdriver', false); }
+    catch (e) { defGet(window.navigator, 'webdriver', false); }
+    // 2) 桌面鼠标会话：没有触摸屏的机器 maxTouchPoints 为 0（避免环境不一致）
+    try { if (window.navigator.maxTouchPoints > 0) defGet(window.navigator, 'maxTouchPoints', 0); }
+    catch (e) {}
+    // 3) 常见自动化注入残留（Playwright/旧版库构造器命名痕迹）
+    for (const k of ['cdc_adoQpoasnfa76pfcZLmcfl_Array',
+                     'cdc_adoQpoasnfa76pfcZLmcfl_Promise',
+                     'cdc_adoQpoasnfa76pfcZLmcfl_Symbol']) {
+      try { if (k in window) delete window[k]; } catch (e) {}
+    }
+  } catch (e) {}
+}"""
+
 
 def context_key(platform: str, profile: str | None = None) -> str:
     """上下文缓存 key：platform[/profile]。"""
@@ -68,6 +93,7 @@ class BrowserPool:
         self._hb_accounts: set[str] = set()   # 已 ensure 的账号（保活对象）
         self._hb_thread: threading.Thread | None = None
         self._hb_stop = threading.Event()
+        self._stealth_done: set[int] = set()  # 已注入遮蔽脚本的 context（按 id）
 
     @property
     def managed_enabled(self) -> bool:
@@ -130,10 +156,33 @@ class BrowserPool:
                 except Exception:  # noqa: BLE001 —— 保活失败不致命，下轮重试
                     pass
 
+    async def _arm_stealth(self, context: BrowserContext) -> None:
+        """给 context 注册“新文档自动遮蔽”脚本（每 context 只注册一次）。
+
+        已打开的旧文档不会自动生效，需配合 _apply_stealth_now 即时覆盖一次。
+        """
+        key = id(context)
+        if key in self._stealth_done:
+            return
+        try:
+            await context.add_init_script(_STEALTH_JS)
+            self._stealth_done.add(key)
+        except Exception:  # noqa: BLE001 —— 注入失败不致命，页面级仍会兜底
+            log.info("webdriver 遮蔽注入失败（context 级，页面级已兜底）")
+
+    async def _apply_stealth_now(self, page: Page) -> None:
+        """对已加载/正在加载的页面即时执行一次遮蔽（幂等）。"""
+        try:
+            await page.evaluate(_STEALTH_JS)
+        except Exception:  # noqa: BLE001 —— about:blank / 加载中都会安全失败
+            pass
+
     async def _claim_platform_page(self, context: BrowserContext, key: str, platform: str) -> Page:
         """在 context 内认领/新建该平台的标签页（避免每次任务堆积新 tab）。"""
+        await self._arm_stealth(context)
         page = self._pages.get(key)
         if page is not None and not page.is_closed():
+            await self._apply_stealth_now(page)
             return page
         claimed = {id(p) for p in self._pages.values()}
         page = next(
@@ -145,6 +194,7 @@ class BrowserPool:
         if page is None:
             page = await context.new_page()
         page.set_default_timeout(self._settings.browser_timeout_ms)
+        await self._apply_stealth_now(page)
         self._pages[key] = page
         return page
 
@@ -154,8 +204,10 @@ class BrowserPool:
             key = context_key(platform, profile)
             browser = await self._ensure_mgr_browser(key, platform, profile)
             context = browser.contexts[0] if browser.contexts else await browser.new_context()
+            await self._arm_stealth(context)
             page = await context.new_page()
             page.set_default_timeout(self._settings.browser_timeout_ms)
+            await self._apply_stealth_now(page)
             return context, page
 
     async def get_page(self, platform: str, profile: str | None = None) -> tuple[BrowserContext, Page]:
@@ -166,6 +218,7 @@ class BrowserPool:
             context = self._contexts.get(key)
             if context is None:
                 context = browser.contexts[0] if browser.contexts else await browser.new_context()
+                await self._arm_stealth(context)
                 self._contexts[key] = context
             return context, await self._claim_platform_page(context, key, platform)
 

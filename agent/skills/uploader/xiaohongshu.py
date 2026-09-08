@@ -7,12 +7,21 @@
 from __future__ import annotations
 
 import asyncio
+import random
 from typing import TYPE_CHECKING
 
 from ...logger import log
 from ...models import PostPayload, PublishResult
+from . import humanizer as hz
 from .base import PlatformAdapter
-from .helpers import fit_text, has_any_visible, safe_goto, type_human
+from .helpers import (
+    click_first_usable_human,
+    dismiss_popups,
+    fit_text,
+    has_any_visible,
+    safe_goto,
+    type_human,
+)
 
 if TYPE_CHECKING:
     from playwright.async_api import Page
@@ -56,9 +65,17 @@ class XiaohongshuAdapter(PlatformAdapter):
         if not payload.images:
             return PublishResult(self.platform, False, "failed", "小红书图文发布缺少图片")
 
-        await safe_goto(page, PUBLISH_IMAGE_URL)
-        await page.wait_for_timeout(4000)
-        from .helpers import click_first_usable as _cfu
+        # ---------- 拟人链路：不“直奔发布页” ----------
+        # 会话刚打开就到 /publish 直达页是典型脚本特征；
+        # 先制造“人类到场感”：首页游走/滚动/悬停 → UI 入口点进发布页
+        # （若上一会话已停在发布页，例如人工草稿未完，则直接续写）。
+        if "/publish" not in (page.url or "").lower():
+            await self._warmup_home(page)
+            entered = await self._open_publish_ui(page)
+            if not entered:
+                log.info("小红书：UI 入口 12s 内未达发布页，回退直达 URL（保底）")
+                await safe_goto(page, PUBLISH_IMAGE_URL)
+        await asyncio.sleep(hz.think_ms(0.8, 2.2) / 1000.0)
 
         # 站点会记住上次发布类型（实测 target=image 也可能被重定向到"上传视频"页），
         # 发现视频上传区时显式切到"上传图文"标签
@@ -66,7 +83,6 @@ class XiaohongshuAdapter(PlatformAdapter):
 
         # 上传图片：先用直接 set_input_files（真实环境第一版验证能传图、草稿成功）；
         # 若页面无可用 file input 再退回"点上传图片按钮 + file chooser"。
-
         uploaded = False
         file_inputs = page.locator("input[type='file']")
         if await file_inputs.count() > 0:
@@ -80,7 +96,8 @@ class XiaohongshuAdapter(PlatformAdapter):
             for attempt in range(2):
                 try:
                     async with page.expect_file_chooser(timeout=15000) as fc_info:
-                        clicked = await _cfu(page, [
+                        # 拟人点击“上传图片/上传图文”入口打开系统文件选择框
+                        clicked = await click_first_usable_human(page, [
                             "button:has-text('上传图片')", "text=/上传图片/",
                             "[class*='image-upload-buttons']", "button:has-text('上传图文')",
                         ])
@@ -125,8 +142,16 @@ class XiaohongshuAdapter(PlatformAdapter):
             return PublishResult(self.platform, False, "failed",
                                  f"小红书标题/正文填写失败 title={title_ok} content={content_ok}")
 
-        await page.keyboard.press("Escape")
-        await page.wait_for_timeout(1500)
+        # 发布前“检查一遍再点”：滚动检查 → 光标回到按钮附近 → 思考停顿
+        try:
+            await page.keyboard.press("Escape")
+        except Exception:  # noqa: BLE001
+            pass
+        await asyncio.sleep(hz.think_ms(0.6, 1.8) / 1000.0)
+        try:
+            await hz.scroll_human(page, random.randint(-120, -60))
+        except Exception:  # noqa: BLE001
+            pass
 
         # 真发布：点页面固定底部的"发布笔记"按钮
         # （用户需求：不要只存草稿；如后续要草稿模式可加 payload.draft=True）
@@ -136,6 +161,95 @@ class XiaohongshuAdapter(PlatformAdapter):
             "小红书图文已发布" if published else "小红书点击发布失败",
         )
 
+    # ---------------- 拟人预热 / 发布页导航 ----------------
+    async def _warmup_home(self, page: Page) -> None:
+        """发布前在首页制造“人类到场感”：滚动浏览 + 光标游走悬停 + 思考停顿。
+
+        总耗时约 4~12s（随机），仅做视觉与光标动作，不点击任何内容。
+        """
+        try:
+            await hz.idle_wander(page, seconds=hz.think_ms(0.8, 2.0) / 1000.0)
+        except Exception:  # noqa: BLE001
+            pass
+        for _ in range(random.randint(1, 2)):
+            try:
+                await hz.scroll_human(page, random.randint(160, 480))
+                await asyncio.sleep(hz.think_ms(0.8, 2.4) / 1000.0)
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            await hz.wander(page, seconds=random.uniform(2.5, 6.0))
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            await dismiss_popups(page, max_rounds=2)
+        except Exception:  # noqa: BLE001
+            pass
+
+    # 在首页找「发布笔记」入口（文本命中 + 命中测试保证可点），返回其中心坐标
+    _PUBLISH_ENTRY_JS = """(txt) => {
+      try {
+        const pick = (el) => {
+          const r = el.getBoundingClientRect();
+          if (r.width < 8 || r.height < 8) return null;
+          if (r.bottom < 0 || r.right < 0 || r.top > (window.innerHeight || 900)) return null;
+          const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+          const top = document.elementFromPoint(cx, cy);
+          if (top && (el === top || el.contains(top))) return {x: cx, y: cy};
+          return null;
+        };
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) {
+          const node = walker.currentNode;
+          const t = (node.textContent || '').replace(/\\s+/g, '');
+          if (!t || !t.includes(txt)) continue;
+          let el = node.parentElement;
+          for (let d = 0; el && el !== document.body && d < 6; el = el.parentElement, d++) {
+            const p = pick(el);
+            if (p) return p;
+          }
+        }
+      } catch (e) {}
+      return null;
+    }"""
+
+    async def _await_publish_target(self, page: Page, timeout: float = 12.0) -> bool:
+        """轮询判断页面已进入发布/上传编辑器状态。"""
+        deadline = asyncio.get_event_loop().time() + timeout
+        while asyncio.get_event_loop().time() < deadline:
+            try:
+                url = page.url or ""
+                if "publish" in url:
+                    return True
+                probes = [
+                    page.locator("xhs-publish-btn").count(),
+                    page.locator(".creator-tab").count(),
+                    page.locator("input[type='file']").count(),
+                ]
+                if any(await asyncio.gather(*probes)):
+                    return True
+            except Exception:  # noqa: BLE001
+                pass
+            await page.wait_for_timeout(500)
+        return False
+
+    async def _open_publish_ui(self, page: Page) -> bool:
+        """从首页 UI 入口点进发布页（拟人点击，不直达 URL）。
+
+        返回 False 表示 12s 内未确认进入发布页（由调用方回退直达 URL）。
+        """
+        try:
+            point = await page.evaluate(self._PUBLISH_ENTRY_JS, "发布笔记")
+            if point:
+                await hz.click_point(page, float(point["x"]), float(point["y"]),
+                                     label="首页·发布笔记入口")
+                ok = await self._await_publish_target(page, timeout=12.0)
+                log.info("小红书：UI 入口进入发布页=%s", ok)
+                return ok
+        except Exception as exc:  # noqa: BLE001
+            log.warning("小红书：查找/点击发布笔记入口异常: %s", exc)
+        return False
+
     # ---------------- 内部实现 ----------------
     async def _ensure_image_tab(self, page: Page) -> bool:
         """确保当前在"上传图文"标签页。
@@ -144,7 +258,7 @@ class XiaohongshuAdapter(PlatformAdapter):
         用顶部 div.creator-tab.active 的文本判定当前标签（最可靠），
         不是图文就 JS 点击"上传图文"标签。
         """
-        from .helpers import click_first_usable
+        from .helpers import click_first_usable_human
 
         ACTIVE_TAB_JS = """() => {
             const tabs = Array.from(document.querySelectorAll('div.creator-tab'));
@@ -178,8 +292,10 @@ class XiaohongshuAdapter(PlatformAdapter):
                 except Exception:  # noqa: BLE001
                     clicked = False
                 if not clicked:
-                    # 兜底：Playwright 真实点击
-                    clicked = await click_first_usable(page, ["div.creator-tab:has-text('上传图文')"])
+                    # 兜底：拟人真实点击“上传图文”标签
+                    clicked = await click_first_usable_human(
+                        page, ["div.creator-tab:has-text('上传图文')"]
+                    )
                 log.info("小红书：当前为'上传视频'，点击'上传图文'标签（点击=%s）", clicked)
                 switched = True
                 await page.wait_for_timeout(3000)
@@ -188,13 +304,17 @@ class XiaohongshuAdapter(PlatformAdapter):
         log.warning("小红书：25 秒内未能切换到'上传图文'页（选择器可能失效）")
         return False
 
-    @staticmethod
-    async def _fill_if_visible(page: Page, locator, value: str) -> bool:
-        """元素可见才输入（拟人键入 + 随机停顿，降低脚本检测特征）。"""
+    async def _fill_if_visible(self, page: Page, locator, value: str) -> bool:
+        """元素可见才输入：拟人点击进入 + 拟人键入（脉冲串+思考停顿）。
+
+        点击先走 humanizer（弯轨移动/悬停/持键），失败再退回 locator.click()，
+        保证输入框拿到真实焦点且不暴露“直线瞬移点击”特征。
+        """
         try:
             if not await locator.is_visible():
                 return False
-            await locator.click()
+            if not await hz.click_locator_human(page, locator, label="输入框"):
+                await locator.click()
             await type_human(page, value)
             return True
         except Exception:  # noqa: BLE001
@@ -256,10 +376,10 @@ class XiaohongshuAdapter(PlatformAdapter):
             log.warning("小红书发布：未找到可用的 xhs-publish-btn 发布按钮")
             return False
         log.info("小红书发布：真实点击 shadow 内发布按钮 @(%d,%d)", point["x"], point["y"])
-        await page.mouse.move(point["x"], point["y"], steps=5)
-        await page.wait_for_timeout(300)
-        await page.mouse.click(point["x"], point["y"])
-        await page.wait_for_timeout(6000)
+        await hz.click_point(page, float(point["x"]), float(point["y"]),
+                             label="xhs-publish 发布按钮(shadow)")
+        # 提交后等待服务端处理结果（随机化等待，不固定 6s）
+        await asyncio.sleep(hz.think_ms(3.0, 7.0) / 1000.0)
         return True
 
 

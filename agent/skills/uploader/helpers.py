@@ -29,30 +29,40 @@ def fit_text(value: str | None, limit: int) -> str:
 
 
 async def type_human(page: Page, value: str) -> None:
-    """逐段键入并模拟真人节奏：随机打字间隔 + 随机停顿。
+    """逐段键入并模拟真人节奏：脉冲串 + 高熵间隔 + 输入法式提交停顿。
 
-    相比 locator.fill() 的“瞬时填完”，平台的脚本运营检测更容易放行
-    带停顿的键盘输入（小红书尤其明显）。
+    相比 locator.fill() 的“瞬时填完”与旧的“均匀随机延迟”，真人输入是
+    “快速打出 3~8 字符（一次联想/词组）→ 停顿选词/想下一句”的脉冲串结构；
+    单字符间隔走重尾分布（多数 55~150ms、偶发 180ms+ 找键/卡顿），
+    标点后额外长停——整体熵值更高、不呈均匀特征（小红书脚本检测重点看这个）。
     """
     value = str(value or "")
     if not value:
         return
-    parts = re.split(r"(?<=[。！？!?，,.;；\n])", value) or [value]
+    from .humanizer import burst_segment_len, commit_pause_ms, keystroke_delay_ms
+
+    PUNCT = set("。！？!?，,.;；：:、…\n")
+    parts = re.split(r"(?<=[。！？!?，,.;；：:\n])", value) or [value]
     for part in parts:
         if not part:
             continue
         i = 0
         n = len(part)
         while i < n:
-            size = random.randint(10, 28)
+            size = min(burst_segment_len(), n - i)
             chunk = part[i:i + size]
-            await page.keyboard.type(chunk, delay=random.randint(30, 95))
+            for ch in chunk:
+                await page.keyboard.type(ch, delay=keystroke_delay_ms())
+                # 标点处：真人会顿一下（写完整句才标点）
+                if ch in PUNCT:
+                    await page.wait_for_timeout(commit_pause_ms() * random.uniform(0.8, 1.6))
             i += size
-            # 随机“思考停顿”（约一半概率），避免机械匀速
-            if random.random() < 0.45:
-                await page.wait_for_timeout(random.randint(120, 650))
-        if random.random() < 0.3:
-            await page.wait_for_timeout(random.randint(200, 500))
+            # 段间停顿：约 60% 概率（选词/想下一句），重尾分布
+            if random.random() < 0.6:
+                await page.wait_for_timeout(commit_pause_ms())
+    # 写完后的“检查一遍”停顿
+    if random.random() < 0.25:
+        await page.wait_for_timeout(random.randint(300, 900))
 
 
 async def first_visible_locator(page: Page, selectors: list[str]) -> Locator | None:
@@ -75,6 +85,29 @@ async def click_first_usable(page: Page, selectors: list[str]) -> bool:
     loc = await first_visible_locator(page, selectors)
     if loc is None:
         return False
+    try:
+        await loc.click()
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def click_first_usable_human(page: Page, selectors: list[str]) -> bool:
+    """拟人点击第一个可见元素（弯轨移动+悬停+持键）。
+
+    用于对“行为指纹”敏感的平台/关键步骤；返回 True 仅代表已发出点击。
+    若元素不可视或拟人点击异常，回退到标准 locator.click()。
+    """
+    from .humanizer import click_locator_human
+
+    loc = await first_visible_locator(page, selectors)
+    if loc is None:
+        return False
+    try:
+        if await click_locator_human(page, loc):
+            return True
+    except Exception:  # noqa: BLE001
+        pass
     try:
         await loc.click()
         return True
