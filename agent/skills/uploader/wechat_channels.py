@@ -17,8 +17,9 @@ from typing import TYPE_CHECKING
 
 from ...logger import log
 from ...models import PostPayload, PublishResult
+from . import humanizer as hz
 from .base import PlatformAdapter
-from .helpers import page_text, safe_goto
+from .helpers import click_first_usable_human, page_text, safe_goto, type_human
 
 if TYPE_CHECKING:
     from playwright.async_api import Page
@@ -79,6 +80,9 @@ class WechatChannelsAdapter(PlatformAdapter):
         if not payload.video:
             return PublishResult(self.platform, False, "failed", "视频号发布缺少视频文件")
 
+        # 与其它平台一致：不每次会话都“直奔发布页”，先在平台工作台停留制造到场感
+        await safe_goto(page, PLATFORM_URL)
+        await hz.idle_wander(page, seconds=hz.think_ms(0.6, 1.8) / 1000.0)
         await safe_goto(page, POST_CREATE_URL)
         # 1) 上传视频文件
         upload_div = page.locator("div.upload-content")
@@ -120,15 +124,18 @@ class WechatChannelsAdapter(PlatformAdapter):
 
     # ---------------- 内部实现 ----------------
     async def _fill_title_tags(self, page: Page, title: str, tags: list[str]) -> None:
-        """点击标题输入区，键盘输入标题与 #话题。"""
+        """点击标题输入区，拟人节奏输入标题与 #话题（替代原来匀速 type(delay=20)）。"""
         editor = page.locator("div.input-editor")
         try:
-            await editor.click()
-            await page.keyboard.type(title, delay=20)
+            if not await hz.click_locator_human(page, editor, label="视频号标题"):
+                await editor.click()
+            await type_human(page, title)
             if tags:
+                await asyncio.sleep(hz.think_ms(0.3, 1.0) / 1000.0)
                 await page.keyboard.press("Enter")
                 for tag in tags:
-                    await page.keyboard.type(f"#{tag}", delay=20)
+                    await type_human(page, f"#{tag}")
+                    await asyncio.sleep(hz.think_ms(0.1, 0.4) / 1000.0)
                     await page.keyboard.press("Space")
         except Exception as exc:  # noqa: BLE001
             log.warning("视频号标题输入异常: %s", exc)
@@ -225,7 +232,7 @@ class WechatChannelsAdapter(PlatformAdapter):
                     break
             await page.click('input[placeholder="请选择时间"]')
             await page.keyboard.press("Control+A")
-            await page.keyboard.type(str(dt.hour))
+            await type_human(page, str(dt.hour))
             await page.locator("div.input-editor").click()  # 令时间生效
         except Exception as exc:  # noqa: BLE001
             log.warning("视频号定时设置失败（忽略，将立即发布）: %s", exc)
@@ -241,16 +248,20 @@ class WechatChannelsAdapter(PlatformAdapter):
             )
             if await el.count():
                 short = re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff《》“”:+?%°]", "", title)[:16]
-                await el.fill(short)
+                if not await hz.click_locator_human(page, el, label="视频号短标题"):
+                    await el.click()
+                await type_human(page, short)
         except Exception as exc:  # noqa: BLE001
             log.warning("视频号短标题填写失败（忽略）: %s", exc)
 
     async def _click_publish(self, page: Page) -> bool:
-        """点击"发表"并等待跳转到作品列表页。"""
+        """拟人点击"发表"并等待跳转到作品列表页。"""
         try:
             btn = page.locator('div.form-btns button:has-text("发表")')
             if await btn.count():
-                await btn.click()
+                if not await click_first_usable_human(
+                        page, ['div.form-btns button:has-text("发表")']):
+                    await btn.click()
             await page.wait_for_url(f"**{POST_LIST_URL}**", timeout=60000)
             return True
         except Exception as exc:  # noqa: BLE001

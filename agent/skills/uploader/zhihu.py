@@ -15,8 +15,17 @@ import re
 
 from ...logger import log
 from ...models import PostPayload, PublishResult
+from . import humanizer as hz
 from .base import PlatformAdapter
-from .helpers import click_first_usable, fill_first_visible, has_any_visible, page_text, safe_goto
+from .helpers import (
+    click_first_usable,
+    click_first_usable_human,
+    fill_first_visible,
+    has_any_visible,
+    page_text,
+    safe_goto,
+    type_human,
+)
 
 SIGNIN_URL = "https://www.zhihu.com/signin"
 HOME_URL = "https://www.zhihu.com/"
@@ -80,6 +89,9 @@ class ZhihuAdapter(PlatformAdapter):
         if not await self.check_login(profile=profile):
             return PublishResult(self.platform, False, "login_required", "知乎未登录")
 
+        # 与其它平台一致：不“每次会话直接砸到 /write”，先经首页制造到场感再进写作页
+        await safe_goto(page, HOME_URL)
+        await hz.idle_wander(page, seconds=hz.think_ms(0.6, 1.8) / 1000.0)
         await safe_goto(page, WRITE_URL)
         title_loc = page.locator("textarea[placeholder*='标题']").first
         editor_loc = page.locator(
@@ -91,30 +103,38 @@ class ZhihuAdapter(PlatformAdapter):
         except Exception as exc:  # noqa: BLE001
             return PublishResult(self.platform, False, "failed", f"知乎写作页编辑器未出现: {exc}")
 
-        # 标题（textarea，直接 fill）
+        # 标题（textarea）：拟人点击进入 + 拟人键入；fill 的“瞬时填完”是明显脚本特征
         try:
-            await title_loc.fill(payload.title[:100])
+            if not await hz.click_locator_human(page, title_loc, label="知乎标题"):
+                await title_loc.click()
+            await type_human(page, payload.title[:100])
         except Exception as exc:  # noqa: BLE001
             return PublishResult(self.platform, False, "failed", f"知乎标题填写失败: {exc}")
 
-        # 正文：点击 Draft 编辑器 → 全选清空（防草稿恢复）→ 键盘输入
+        # 正文：点击 Draft 编辑器 → 全选清空（防草稿恢复）→ 拟人键盘输入
         try:
-            await editor_loc.click()
+            if not await hz.click_locator_human(page, editor_loc, label="知乎正文"):
+                await editor_loc.click()
             await page.keyboard.press("Control+A")
             await page.keyboard.press("Delete")
-            await page.wait_for_timeout(300)
+            await asyncio.sleep(hz.think_ms(0.2, 0.8) / 1000.0)
             body = payload.content or ""
             if payload.tags:
                 body = f"{body}\n\n{' '.join(t for t in payload.tags[:5])}"
-            # Draft.js 逐段输入（空行分段，过长截断）
-            for paragraph in body.split("\n")[:120]:
+            # Draft.js 逐段输入（空行分段，过长截断）：段内用脉冲串拟人节奏，
+            # 每段之间保留“想想下一句”的停顿，替代原来的匀速 type(delay=8)
+            paragraphs = [p for p in body.split("\n")[:120]]
+            for idx, paragraph in enumerate(paragraphs):
                 if paragraph:
-                    await page.keyboard.type(paragraph[:500], delay=8)
+                    await type_human(page, paragraph[:500])
+                if idx < len(paragraphs) - 1:
+                    await asyncio.sleep(hz.think_ms(0.15, 0.7) / 1000.0)
                 await page.keyboard.press("Enter")
         except Exception as exc:  # noqa: BLE001
             return PublishResult(self.platform, False, "failed", f"知乎正文填写失败: {exc}")
 
-        await page.wait_for_timeout(1500)
+        # 填完后的“通读检查”停顿（不固定 1.5s）
+        await asyncio.sleep(hz.think_ms(1.2, 3.4) / 1000.0)
 
         # 点"发布"（按钮解禁后；dry-run 会在这一步拦截）
         published = await self._click_publish(page)
@@ -160,17 +180,15 @@ class ZhihuAdapter(PlatformAdapter):
             log.warning("知乎发布按钮 30 秒内未解禁")
             return False
 
-        # 第一次点击：展开"发布设置"面板
+        # 第一次点击：展开"发布设置"面板（拟人：弯轨移动 → 悬停思考 → 按下持键）
         log.info("知乎：点'发布'打开设置面板 @(%d,%d)", point["x"], point["y"])
-        await page.mouse.move(point["x"], point["y"], steps=5)
-        await page.wait_for_timeout(200)
-        await page.mouse.click(point["x"], point["y"])
-        await page.wait_for_timeout(2500)
+        await hz.click_point(page, float(point["x"]), float(point["y"]), label="知乎发布·打开面板")
+        await asyncio.sleep(hz.think_ms(1.0, 2.6) / 1000.0)
 
         # 第二次点击：确认发布（位置不变；若弹出专栏选择等弹窗，补点确认）
         log.info("知乎：再次点'发布'确认发布 @(%d,%d)", point["x"], point["y"])
-        await page.mouse.click(point["x"], point["y"])
-        await page.wait_for_timeout(3000)
-        await click_first_usable(page, _CONFIRM_BTN)
-        await page.wait_for_timeout(3000)
+        await hz.click_point(page, float(point["x"]), float(point["y"]), label="知乎发布·确认")
+        await asyncio.sleep(hz.think_ms(1.2, 3.0) / 1000.0)
+        await click_first_usable_human(page, _CONFIRM_BTN)
+        await asyncio.sleep(hz.think_ms(1.0, 2.6) / 1000.0)
         return True

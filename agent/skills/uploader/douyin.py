@@ -15,9 +15,11 @@ from typing import TYPE_CHECKING
 
 from ...logger import log
 from ...models import PostPayload, PublishResult
+from . import humanizer as hz
 from .base import PlatformAdapter
 from .helpers import (
     click_first_usable,
+    click_first_usable_human,
     fill_first_visible,
     fit_text,
     has_any_visible,
@@ -103,20 +105,20 @@ class DouyinAdapter(PlatformAdapter):
 
         # 从创作者中心首页点"发布图文"进入（比直接跳发布 URL 更接近真实流程）
         await safe_goto(page, "https://creator.douyin.com/creator-micro/home")
-        await page.wait_for_timeout(3000)
-        from .helpers import click_first_usable as _cfu
+        await hz.idle_wander(page, seconds=hz.think_ms(0.8, 2.2) / 1000.0)
+        from .helpers import click_first_usable_human as _cfh
 
-        entered = await _cfu(page, ["text=/发布图文/"])
+        entered = await _cfh(page, ["text=/发布图文/"])
         if not entered:
-            # 兜底：点侧栏"作品发布"展开后再选图文
-            await _cfu(page, ["text=/作品发布/"])
-            await page.wait_for_timeout(1500)
-            await _cfu(page, ["text=/发布图文/", "text=/图文/"])
-        await page.wait_for_timeout(4000)
+            # 兜底：点侧栏"作品发布"展开后再选图文（人类习惯先看侧栏菜单）
+            await _cfh(page, ["text=/作品发布/"])
+            await asyncio.sleep(hz.think_ms(0.8, 2.0) / 1000.0)
+            await _cfh(page, ["text=/发布图文/", "text=/图文/", "text=/发图文/"])
+        await asyncio.sleep(hz.think_ms(0.8, 2.4) / 1000.0)
         if "post/image" not in page.url and "post" not in page.url:
             log.warning("点击发布图文后未进入发布页（URL=%s），回退直接导航", page.url[:70])
             await safe_goto(page, IMAGE_POST_URL)
-            await page.wait_for_timeout(3000)
+            await asyncio.sleep(hz.think_ms(1.0, 2.6) / 1000.0)
 
         await wait_for_any_visible(page, _UPLOAD_START, timeout=20.0)
 
@@ -129,7 +131,7 @@ class DouyinAdapter(PlatformAdapter):
             await wait_for_any_visible(page, _UPLOAD_START, timeout=20.0)
             uploaded = await self._set_files(page, payload.images, "image")
         upload_ready = await self._wait_image_ready(page, len(payload.images))
-        await page.wait_for_timeout(1500)
+        await asyncio.sleep(hz.think_ms(0.6, 1.8) / 1000.0)
         await self._dismiss_overlays(page)
         await has_any_visible(page, _METADATA_READY)  # 等待编辑区出现（不强制）
         meta = await self._fill_metadata(page, payload)
@@ -158,12 +160,26 @@ class DouyinAdapter(PlatformAdapter):
         if not payload.video:
             return PublishResult(self.platform, False, "failed", "缺少视频文件路径")
 
-        await safe_goto(page, VIDEO_POST_URL)
-        await page.wait_for_timeout(3000)
+        # 与图文一致：先到创作者中心首页预热，再点侧栏"发布视频"UI 进入，
+        # 避免每次任务都“直奔上传 URL”的固定行为特征
+        await safe_goto(page, "https://creator.douyin.com/creator-micro/home")
+        await hz.idle_wander(page, seconds=hz.think_ms(0.8, 2.2) / 1000.0)
+        from .helpers import click_first_usable_human as _cfh
+
+        entered = await _cfh(page, ["text=/发布视频/"])
+        if not entered:
+            await _cfh(page, ["text=/作品发布/"])
+            await asyncio.sleep(hz.think_ms(0.8, 2.0) / 1000.0)
+            await _cfh(page, ["text=/发布视频/", "text=/上传视频/"])
+        await asyncio.sleep(hz.think_ms(0.8, 2.4) / 1000.0)
+        if "post/video" not in page.url and "post" not in page.url:
+            log.warning("点击发布视频后未进入发布页（URL=%s），回退直接导航", page.url[:70])
+            await safe_goto(page, VIDEO_POST_URL)
+            await asyncio.sleep(hz.think_ms(1.0, 2.6) / 1000.0)
         await wait_for_any_visible(page, _UPLOAD_START, timeout=15.0)
         uploaded = await self._set_files(page, [payload.video], "video")
         upload_ready = await self._wait_video_ready(page, timeout=240)
-        await page.wait_for_timeout(2000)
+        await asyncio.sleep(hz.think_ms(0.8, 2.2) / 1000.0)
         await self._dismiss_overlays(page)
         meta = await self._fill_metadata(page, payload)
 
@@ -192,14 +208,14 @@ class DouyinAdapter(PlatformAdapter):
             clear_btn = page.locator("button:has-text('清空并重新上传')").first
             if await clear_btn.count() and await clear_btn.is_visible():
                 await clear_btn.click()
-                await page.wait_for_timeout(1500)
+                await asyncio.sleep(hz.think_ms(0.6, 1.6) / 1000.0)
                 # 处理可能的确认弹窗（确定/清空/确认）
                 # 确认弹窗文案实测："重新上传将清空已上传图片，是否重新上传？" → 点精确"重新上传"
                 # （不能用子串匹配——会误点右上角"清空并重新上传"再触发一次清空）
                 await click_first_usable(page, [
                     "text=/^重新上传$/", "button:has-text('重新上传'):not(:has-text('清空'))",
                 ])
-                await page.wait_for_timeout(2000)
+                await asyncio.sleep(hz.think_ms(0.8, 2.0) / 1000.0)
                 log.info("抖音上传：已清空草稿残留")
         except Exception:  # noqa: BLE001
             pass
@@ -242,7 +258,7 @@ class DouyinAdapter(PlatformAdapter):
             await _wav(page, ["text=/继续添加/", "text=/点击上传/",
                               "text=/选择一张图片作为封面/"], timeout=20.0)
             async with page.expect_file_chooser(timeout=30000) as fc_info:
-                clicked = await click_first_usable(page, targets)
+                clicked = await click_first_usable_human(page, targets)
                 log.info("抖音上传：点击上传入口（可点=%s）", clicked)
             chooser = await fc_info.value
             await chooser.set_files(files)
@@ -301,11 +317,11 @@ class DouyinAdapter(PlatformAdapter):
         return False
 
     async def _dismiss_overlays(self, page: Page) -> None:
-        """点掉"我知道了/完成"等引导浮层。"""
+        """点掉"我知道了/完成"等引导浮层（拟人点击 + 思考停顿，不连点）。"""
         for _ in range(3):
-            if not await click_first_usable(page, _DISMISS):
+            if not await click_first_usable_human(page, _DISMISS):
                 return
-            await page.wait_for_timeout(500)
+            await asyncio.sleep(hz.think_ms(0.4, 1.4) / 1000.0)
 
     async def _fill_metadata(self, page: Page, payload: PostPayload) -> bool:
         """填标题、正文（含话题）。抖音标题上限 30 字，先截断再填。"""
@@ -323,9 +339,9 @@ class DouyinAdapter(PlatformAdapter):
         """勾选"仅自己可见"（安全模式）。"""
         await page.keyboard.press("Escape")
         await page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
-        await page.wait_for_timeout(1000)
-        if await click_first_usable(page, _PRIVATE_VISIBILITY):
-            await page.wait_for_timeout(500)
+        await asyncio.sleep(hz.think_ms(0.5, 1.5) / 1000.0)
+        if await click_first_usable_human(page, _PRIVATE_VISIBILITY):
+            await asyncio.sleep(hz.think_ms(0.3, 1.0) / 1000.0)
             return True
         # 兜底：按文本找节点点击
         return await page.evaluate(
@@ -345,7 +361,7 @@ class DouyinAdapter(PlatformAdapter):
         """
         clicked = await self._click_bottom_publish(page)
         if not clicked:
-            clicked = await click_first_usable(page, _PUBLISH_BTN)
+            clicked = await click_first_usable_human(page, _PUBLISH_BTN)
         if not clicked:
             log.warning("抖音发布按钮点击失败（未找到可用按钮）")
             return False
@@ -383,9 +399,8 @@ class DouyinAdapter(PlatformAdapter):
             if not point:
                 return False
             log.info("抖音发布：真实点击按钮 %s @(%d,%d)", point["text"], point["x"], point["y"])
-            await page.mouse.move(point["x"], point["y"], steps=5)
-            await page.wait_for_timeout(300)
-            await page.mouse.click(point["x"], point["y"])
+            await hz.click_point(page, float(point["x"]), float(point["y"]),
+                                 label=f"发布按钮·{point['text']}")
             return True
         except Exception as exc:  # noqa: BLE001
             log.warning("抖音发布按钮真实点击失败: %s", exc)

@@ -116,12 +116,15 @@ async def click_first_usable_human(page: Page, selectors: list[str]) -> bool:
 
 
 async def fill_first_visible(page: Page, selectors: list[str], value: str) -> bool:
-    """填充第一个可见输入框（拟人键盘输入，失败兜底一次性 fill）。"""
+    """填充第一个可见输入框（拟人点击进入 + 拟人键盘输入，失败兜底 fill）。"""
+    from .humanizer import click_locator_human
+
     loc = await first_visible_locator(page, selectors)
     if loc is None:
         return False
     try:
-        await loc.click()
+        if not await click_locator_human(page, loc, label="输入框"):
+            await loc.click()
         await type_human(page, value)
         return True
     except Exception:  # noqa: BLE001

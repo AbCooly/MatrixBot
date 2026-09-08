@@ -11,16 +11,20 @@
 from __future__ import annotations
 
 import asyncio
+import random
 
 from ...logger import log
 from ...models import PostPayload, PublishResult
+from . import humanizer as hz
 from .base import PlatformAdapter
 from .helpers import (
-    click_first_usable,
+    click_first_usable_human,
+    dismiss_popups,
     fill_first_visible,
     has_any_visible,
     page_text,
     safe_goto,
+    type_human,
 )
 
 LOGIN_URL = "https://mp.toutiao.com/auth/page/login"
@@ -109,14 +113,15 @@ class ToutiaoAdapter(PlatformAdapter):
         - "发文助手"抽屉会弹全页遮罩且无关闭按钮 → JS 移除
         - 发布：右下角 primary 按钮文本即"发布"（微头条直发，无预览步骤）
         """
-        from .helpers import dismiss_popups
-
         page = (await self._pool.get_page("toutiao", profile))[1]
         if not await self.check_login(profile=profile):
             return PublishResult(self.platform, False, "login_required", "头条未登录")
 
+        # 已在创作者后台停留过（check_login 刚访问过首页），制造短暂“阅读感”
+        # 再进入微头条发布页（后台内同域跳转，贴近真人点菜单进发布页的节奏）
+        await hz.idle_wander(page, seconds=hz.think_ms(0.6, 1.8) / 1000.0)
         await safe_goto(page, PUBLISH_URL)
-        await page.wait_for_timeout(4000)
+        await asyncio.sleep(hz.think_ms(1.0, 2.8) / 1000.0)
         await self._kill_assistant_drawer(page)
         await dismiss_popups(page)
 
@@ -129,12 +134,14 @@ class ToutiaoAdapter(PlatformAdapter):
         editor = page.locator("div.ProseMirror[contenteditable='true']").first
         try:
             await editor.wait_for(state="visible", timeout=20000)
-            await editor.click()
+            if not await hz.click_locator_human(page, editor, label="微头条正文"):
+                await editor.click()
             # 微头条会自动恢复上次草稿，先全选清空再输入，避免内容叠加
             await page.keyboard.press("Control+A")
             await page.keyboard.press("Delete")
-            await page.wait_for_timeout(300)
-            await page.keyboard.type(body[:1500], delay=10)
+            await asyncio.sleep(hz.think_ms(0.2, 0.8) / 1000.0)
+            # 拟人脉冲串输入，替代原来的匀速 type(delay=10)（固定 10ms 是最典型脚本特征）
+            await type_human(page, body[:1500])
         except Exception as exc:  # noqa: BLE001
             return PublishResult(self.platform, False, "failed", f"微头条正文填写失败: {exc}")
 
@@ -142,11 +149,11 @@ class ToutiaoAdapter(PlatformAdapter):
         uploaded = False
         if payload.images:
             try:
-                await click_first_usable(page, [
+                await click_first_usable_human(page, [
                     "button.syl-toolbar-button:has-text('图片')",
                     "span.icon-wrapper:has-text('图片')",
                 ])
-                await page.wait_for_timeout(2000)
+                await asyncio.sleep(hz.think_ms(0.8, 2.0) / 1000.0)
                 img_input = page.locator("input[type='file'][accept*='image']").first
                 if await img_input.count():
                     await img_input.set_input_files(payload.images[:9])
@@ -159,7 +166,7 @@ class ToutiaoAdapter(PlatformAdapter):
                             disabled_attr = await confirm.get_attribute("disabled")
                             cls = await confirm.get_attribute("class") or ""
                             if not disabled_attr and "disabled" not in cls:
-                                await confirm.click()
+                                await hz.click_locator_human(page, confirm, label="微头条插入图片·确定")
                                 uploaded = True
                                 log.info("微头条：已确认插入图片")
                                 break
@@ -183,17 +190,23 @@ class ToutiaoAdapter(PlatformAdapter):
             except Exception:  # noqa: BLE001
                 pass
             await page.wait_for_timeout(1500)
-        await page.wait_for_timeout(2000)
+        # 发布前“检查一遍”的停顿：把页面滚到顶部看排版，再回到发布按钮附近
+        await asyncio.sleep(hz.think_ms(0.8, 2.2) / 1000.0)
+        try:
+            await hz.scroll_human(page, random.randint(-180, -80))
+        except Exception:  # noqa: BLE001
+            pass
         await self._kill_assistant_drawer(page)
 
         # 4) 点"发布"（primary 按钮；定时发布是 default 样式，不命中 primary）
-        clicked = await click_first_usable(page, [
+        clicked = await click_first_usable_human(page, [
             "button.byte-btn-primary:has-text('发布'):not(:has-text('定时'))",
             "button.byte-btn-primary >> text=/^发布$/",
         ])
         if not clicked:
             return PublishResult(self.platform, False, "failed", "微头条未找到发布按钮")
-        await page.wait_for_timeout(5000)
+        # 点发布后真人会等页面反馈，不固定 5s：让 success 轮询自己接管
+        await asyncio.sleep(hz.think_ms(1.2, 3.0) / 1000.0)
         await dismiss_popups(page)
         # 成功判定：跳转内容管理 / 成功提示
         text = await page_text(page)
@@ -205,14 +218,12 @@ class ToutiaoAdapter(PlatformAdapter):
 
     async def publish_article(self, payload: PostPayload, profile: str | None = None) -> PublishResult:
         """头条长文章：profile_v4/graphic/publish 文章编辑器（标题 + 正文）。"""
-        from .helpers import dismiss_popups
-
         page = (await self._pool.get_page("toutiao", profile))[1]
         if not await self.check_login(profile=profile):
             return PublishResult(self.platform, False, "login_required", "头条未登录")
 
         await safe_goto(page, ARTICLE_PUBLISH_URL)
-        await page.wait_for_timeout(4000)
+        await asyncio.sleep(hz.think_ms(1.0, 2.8) / 1000.0)
         await dismiss_popups(page)
 
         title_ok = await fill_first_visible(page, _TITLE_SELECTORS, payload.title)
@@ -223,16 +234,16 @@ class ToutiaoAdapter(PlatformAdapter):
         if not (title_ok and content_ok):
             return PublishResult(self.platform, False, "failed",
                                  f"头条文章标题/正文填写失败 title={title_ok} content={content_ok}")
-        await page.wait_for_timeout(1000)
+        await asyncio.sleep(hz.think_ms(0.6, 1.8) / 1000.0)
         await dismiss_popups(page)
-        # 文章发布：预览并发布 → 确认发布
-        await click_first_usable(page, ["button:has-text('预览并发布')", "button:has-text('发布')"])
-        await page.wait_for_timeout(2500)
+        # 文章发布：预览并发布 → 确认发布（人类会阅读预览，两步之间保留思考停顿）
+        await click_first_usable_human(page, ["button:has-text('预览并发布')", "button:has-text('发布')"])
+        await asyncio.sleep(hz.think_ms(1.2, 3.0) / 1000.0)
         await dismiss_popups(page)
-        await click_first_usable(page, [
+        await click_first_usable_human(page, [
             "button:has-text('确认发布')", "button:has-text('确认')", "button:has-text('发布')",
         ])
-        await page.wait_for_timeout(3000)
+        await asyncio.sleep(hz.think_ms(1.0, 2.6) / 1000.0)
         text = await page_text(page)
         ok = "发布成功" in text or "article" in page.url or "content/manage" in page.url
         return PublishResult(self.platform, True, "published" if ok else "published_unverified",

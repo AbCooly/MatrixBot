@@ -192,14 +192,14 @@ async def _anchor(page: Page) -> tuple[float, float]:
     return cur
 
 
-def _viewport_of(viewport: tuple[float, float, float, float] | None,
-                 page: Page) -> tuple[float, float, float, float]:
+async def _viewport_of(viewport: tuple[float, float, float, float] | None,
+                       page: Page) -> tuple[float, float, float, float]:
     """活动区域：默认避开顶部导航(~12%)/右侧滚动条，留边距。"""
     if viewport:
         x0, y0, x1, y1 = viewport
     else:
         try:
-            dim = page.evaluate(
+            dim = await page.evaluate(
                 "() => ({w: window.innerWidth || 1280, h: window.innerHeight || 900})"
             )
             x0, y0, x1, y1 = 0.0, 0.0, dim["w"], dim["h"]
@@ -332,7 +332,7 @@ async def wander(page: Page, seconds: float,
     if not ENABLED or seconds <= 0:
         return
     deadline = asyncio.get_event_loop().time() + seconds
-    x0, y0, x1, y1 = _viewport_of(viewport, page)
+    x0, y0, x1, y1 = await _viewport_of(viewport, page)
     targets: list[tuple[float, float]] = []
     if click_targets:
         for loc in click_targets[:8]:
@@ -400,7 +400,7 @@ async def idle_wander(page: Page, seconds: float) -> None:
     if not ENABLED or seconds <= 0:
         return
     deadline = asyncio.get_event_loop().time() + seconds
-    x0, y0, x1, y1 = _viewport_of(None, page)
+    x0, y0, x1, y1 = await _viewport_of(None, page)
     while asyncio.get_event_loop().time() < deadline:
         choice = random.random()
         try:
