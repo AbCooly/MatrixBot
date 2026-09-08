@@ -60,7 +60,9 @@ class XiaohongshuAdapter(PlatformAdapter):
     # ---------------- 图文发布 ----------------
     async def publish_image(self, payload: PostPayload, profile: str | None = None) -> PublishResult:
         page = (await self._pool.get_page("xiaohongshu", profile))[1]
-        if not await self.check_login():
+        # 注意：check_login 必须带与 get_page 一致的 profile —— 浏览器守护 MAX_INSTANCES=1，
+        # 裸调（profile=None）会请求第二个无后缀实例把正在用的发布实例淘汰掉
+        if not await self.check_login(profile=profile):
             return PublishResult(self.platform, False, "login_required", "小红书未登录")
         if not payload.images:
             return PublishResult(self.platform, False, "failed", "小红书图文发布缺少图片")

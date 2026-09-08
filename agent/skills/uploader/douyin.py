@@ -100,7 +100,10 @@ class DouyinAdapter(PlatformAdapter):
     async def publish_image(self, payload: PostPayload, profile: str | None = None) -> PublishResult:
         # 复用平台 tab（CDP 不反复开新 tab，用户可手动导航；发布前统一从创作者中心进入）
         page = (await self._pool.get_page("douyin", profile))[1]
-        if not await self.check_login():
+        # 注意：check_login 必须带与 get_page 一致的 profile —— 浏览器守护按「平台×账号」
+        # 起独立实例且 MAX_INSTANCES=1，若这里裸调（profile=None）会去请求第二个无后缀实例，
+        # 把正在用的发布实例淘汰掉（页面被关 → TargetClosedError）。
+        if not await self.check_login(profile=profile):
             return PublishResult(self.platform, False, "login_required", "抖音未登录")
 
         # 从创作者中心首页点"发布图文"进入（比直接跳发布 URL 更接近真实流程）
@@ -155,7 +158,8 @@ class DouyinAdapter(PlatformAdapter):
     # ---------------- 视频发布 ----------------
     async def publish_video(self, payload: PostPayload, profile: str | None = None) -> PublishResult:
         page = (await self._pool.get_page("douyin", profile))[1]
-        if not await self.check_login():
+        # 同上：check_login 必须复用同一 profile 实例，避免触发守护淘汰正在用的发布浏览器
+        if not await self.check_login(profile=profile):
             return PublishResult(self.platform, False, "login_required", "抖音未登录")
         if not payload.video:
             return PublishResult(self.platform, False, "failed", "缺少视频文件路径")

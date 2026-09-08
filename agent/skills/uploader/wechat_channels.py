@@ -75,7 +75,8 @@ class WechatChannelsAdapter(PlatformAdapter):
     # ---------------- 视频发布 ----------------
     async def publish_video(self, payload: PostPayload, profile: str | None = None) -> PublishResult:
         page = (await self._pool.get_page("wechat_channels", profile))[1]
-        if not await self.check_login():
+        # 同上：check_login 复用同一 profile 实例，避免触发守护淘汰正在用的发布浏览器
+        if not await self.check_login(profile=profile):
             return PublishResult(self.platform, False, "login_required", "视频号未登录")
         if not payload.video:
             return PublishResult(self.platform, False, "failed", "视频号发布缺少视频文件")
