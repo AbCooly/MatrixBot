@@ -341,23 +341,121 @@ class XiaohongshuAdapter(PlatformAdapter):
             log.warning("小红书存草稿失败: %s", exc)
             return False
 
-    async def _click_publish(self, page: Page) -> bool:
-        """点击页脚红色"发布"按钮。
+    # 发布结果信号（小写匹配 body 文本）
+    _PUBLISH_OK_PATTERNS = [
+        "发布成功", "作品已发布", "笔记已发布", "发布完成", "已经发布",
+        "提交成功", "发布成功！",
+    ]
+    _PUBLISH_FAIL_PATTERNS = [
+        "发布失败", "保存至草稿", "已保存草稿", "未通过", "内容违规",
+        "请稍后重试", "操作频繁", "请求过于频繁", "网络错误", "服务器开小差",
+        "无法发布", "请重新", "处理失败",
+    ]
+    _PUBLISH_LEAVE_URL_MARKERS = ("note-manager", "new/home", "/home", "console")
 
-        实测（2026-09 DOM）：发布按钮在 ``xhs-publish-btn`` 自定义元素的
-        **closed shadow root** 中——JS/选择器无法访问内部节点
-        （``elementFromPoint`` 只返回宿主，textContent/innerHTML 全空），
-        但真实 CDP 鼠标事件可以点穿 shadow。
-        方案：读宿主矩形，红色"发布"按钮中心在宿主义 fx≈0.604, fy≈0.489
-        （白色"暂存离开"在 fx≈0.39，切勿点到）；submit-disabled=true 时等待。
+    async def _publish_feedback(self, page: Page, timeout: float = 3.0) -> str:
+        """发布点击后的短轮询反馈：返回 "loading" / "toast" / "url" / ""（无动静）。
+
+        "loading": 提交按钮进入 loading 态（请求已发出）
+        "toast":   页面出现成功/失败/草稿提示文本
+        "url":     URL 已离开发布页（跳转）
+        """
+        deadline = asyncio.get_event_loop().time() + timeout
+        saw_loading = False
+        while asyncio.get_event_loop().time() < deadline:
+            try:
+                if not saw_loading:
+                    loading = await page.evaluate(
+                        """() => {
+                            const h = document.querySelector('xhs-publish-btn');
+                            return !!(h && h.getAttribute('submit-loading') === 'true');
+                        }"""
+                    )
+                    if loading:
+                        saw_loading = True
+                state = await page.evaluate(
+                    """() => {
+                        const t = (document.body ? document.body.innerText : '').slice(0, 6000);
+                        return {url: location.href, text: t.replace(/\\s+/g, '')};
+                    }"""
+                )
+                if not state["url"].lower().startswith(
+                        "https://creator.xiaohongshu.com/publish/"):
+                    return "url"
+                compact = state["text"]
+                if any(p in compact for p in self._PUBLISH_OK_PATTERNS) or any(
+                        p in compact for p in self._PUBLISH_FAIL_PATTERNS):
+                    return "toast"
+            except Exception:  # noqa: BLE001
+                pass
+            await page.wait_for_timeout(400)
+        return "loading" if saw_loading else ""
+
+    async def _confirm_publish_result(self, page: Page, timeout: float = 60.0) -> bool:
+        """发布提交后确认真实结果：成功 / 失败(原因入日志) / 超时未决。
+
+        历史坑：点击后盲 sleep 几秒直接返回 True——若请求被平台拦截并自动
+        转存草稿（toast"已保存至草稿"），代码仍误报 published，用户去后台
+        却看不到作品。此处用页面文案/跳转作为真实发布证据。
+        """
+        deadline = asyncio.get_event_loop().time() + timeout
+        snapshot = ""
+        while asyncio.get_event_loop().time() < deadline:
+            try:
+                state = await page.evaluate(
+                    """() => {
+                        const t = (document.body ? document.body.innerText : '').slice(0, 8000);
+                        return {url: location.href, text: t.replace(/\\s+/g, '')};
+                    }"""
+                )
+                snapshot = state["text"]
+            except Exception:  # noqa: BLE001
+                await page.wait_for_timeout(1500)
+                continue
+            url = state["url"].lower()
+            if any(p in snapshot for p in self._PUBLISH_OK_PATTERNS):
+                log.info("小红书发布成功确认：命中成功文案")
+                return True
+            if any(p in snapshot for p in self._PUBLISH_FAIL_PATTERNS):
+                reason = next(p for p in self._PUBLISH_FAIL_PATTERNS if p in snapshot)
+                log.warning("小红书发布失败确认：命中失败文案「%s」", reason)
+                return False
+            # URL 离开发布页（未命中失败文案）按成功处理
+            if not url.startswith("https://creator.xiaohongshu.com/publish/"):
+                log.info("小红书发布成功确认：页面已离开发布编辑器 → %s", state["url"])
+                return True
+            await page.wait_for_timeout(1800)
+        # 超时：截图留档（发布页仍在 / 状态未决），按失败处理
+        try:
+            await page.screenshot(path="/app/logs/xhs_publish_timeout.png")
+        except Exception:  # noqa: BLE001
+            pass
+        log.warning("小红书发布结果 60s 内未确认（仍在发布页），已截图 /app/logs/xhs_publish_timeout.png")
+        return False
+
+    async def _click_publish(self, page: Page) -> bool:
+        """真实发布：拟人点击 + 提交反馈探测 + 结果确认。
+
+        背景（2026-09 实测 DOM）：发布按钮在 ``xhs-publish-btn`` 自定义元素的
+        **closed shadow root** 内——JS/选择器读不到内部节点，真实 CDP 鼠标可
+        点穿 shadow。宿主同时暴露 Angular 方法 ``_onSave()``（存草稿）与
+        ``_onPublish()``（真发布，与按钮点击同源逻辑）。
+
+        策略：
+          1) 读宿主矩形（submit-disabled=true 时等待），按历史实测坐标
+             fx≈0.604 真实点击；3s 无提交反馈（loading/toast/跳转）则
+             补点更靠右的候选 fx≈0.88 一次（防布局变化点空）；
+          2) 仍无反馈 → 降级调用 ``_onPublish()``（等价提交逻辑）；
+          3) 触发后 ``_confirm_publish_result`` 最多等 60s 判定真实结果，
+             成功才返回 True——失败/超时不再误报 published。
         """
         import asyncio as _aio
 
-        deadline = _aio.get_event_loop().time() + 30
-        point = None
+        deadline = _aio.get_event_loop().time() + 40
+        rect = None
         while _aio.get_event_loop().time() < deadline:
             try:
-                point = await page.evaluate(
+                rect = await page.evaluate(
                     """() => {
                         const host = document.querySelector('xhs-publish-btn');
                         if (!host) return null;
@@ -365,23 +463,46 @@ class XiaohongshuAdapter(PlatformAdapter):
                             host.getAttribute('submit-loading') === 'true') return null;
                         const r = host.getBoundingClientRect();
                         if (r.width < 100 || r.height < 20) return null;
-                        return {x: Math.round(r.x + r.width * 0.604),
-                                y: Math.round(r.y + r.height * 0.489)};
+                        return {x: r.x, y: r.y, w: r.width, h: r.height};
                     }"""
                 )
             except Exception:  # noqa: BLE001
-                point = None
-            if point:
+                rect = None
+            if rect:
                 break
-            await page.wait_for_timeout(1000)
-        if not point:
+            await page.wait_for_timeout(800)
+        if not rect:
             log.warning("小红书发布：未找到可用的 xhs-publish-btn 发布按钮")
             return False
-        log.info("小红书发布：真实点击 shadow 内发布按钮 @(%d,%d)", point["x"], point["y"])
-        await hz.click_point(page, float(point["x"]), float(point["y"]),
-                             label="xhs-publish 发布按钮(shadow)")
-        # 提交后等待服务端处理结果（随机化等待，不固定 6s）
-        await asyncio.sleep(hz.think_ms(3.0, 7.0) / 1000.0)
-        return True
+        cx = int(rect["x"] + rect["w"] * 0.604)
+        cy = int(rect["y"] + rect["h"] * 0.5)
+        log.info("小红书发布：真实点击 shadow 内发布按钮 @(%d,%d)", cx, cy)
+        await hz.click_point(page, float(cx), float(cy), label="xhs-publish 发布按钮(shadow)")
+        fired = await self._publish_feedback(page, timeout=3.0)
+        if not fired:
+            # 无提交反馈：可能布局变化未点中 → 补点更靠右的候选（右端“发布”区）
+            cx2 = int(rect["x"] + rect["w"] * 0.88)
+            log.info("小红书发布：无提交反馈，补点候选 @(%d,%d)", cx2, cy)
+            await hz.click_point(page, float(cx2), float(cy), label="xhs-publish 发布候选(右)")
+            fired = await self._publish_feedback(page, timeout=3.0)
+        if not fired:
+            # 降级：调用宿主 Angular 发布方法（与点按钮提交逻辑同源）
+            ok = False
+            try:
+                ok = await page.locator("xhs-publish-btn").evaluate(
+                    """(el) => {
+                        if (typeof el._onPublish !== 'function') return false;
+                        const r = el._onPublish();
+                        if (r && typeof r.then === 'function') return r.then(() => true).catch(() => false);
+                        return true;
+                    }"""
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("小红书发布：_onPublish 调用异常: %s", exc)
+            log.info("小红书发布：坐标点击无反馈，降级 _onPublish() → ok=%s", ok)
+            if not ok:
+                return False
+        # 结果确认（真实证据：成功文案/跳转 / 失败文案/超时）
+        return await self._confirm_publish_result(page)
 
 

@@ -31,7 +31,10 @@ WORKDIR /opt/browser-gui
 COPY profile_manager.py ./profile_manager.py
 COPY supervisord.conf /etc/supervisor/conf.d/browser-gui.conf
 COPY entrypoint.sh ./entrypoint.sh
-RUN chmod +x ./entrypoint.sh
+# Windows 下 git checkout 常把文件写成 CRLF，会破坏 shebang/supervisord 解析，
+# 构建时统一转 LF（幂等，无副作用）
+RUN sed -i 's/\r$//' ./profile_manager.py ./entrypoint.sh /etc/supervisor/conf.d/browser-gui.conf \
+    && chmod +x ./entrypoint.sh
 
 # 5900=VNC(可不开) 6080=noVNC(网页远程桌面) 9100=账号浏览器守护 API(agent 内部调用)
 EXPOSE 5900 6080 9100

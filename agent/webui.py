@@ -339,6 +339,16 @@ _TAKEOVER_WINDOW_S = 10 * 60
 # 用于“刚在远程桌面登录完 → 点 ⟳ 主动刷新”，不用等缓存/窗口过期。
 _force_check: set[str] = set()
 
+# 删除账号后的「墓碑」窗口：删除期间/刚删完，后台登录态检测不得再为该账号
+# 起浏览器实例（避免与删除动作竞态、目录被 Chromium 重建导致“删了又出现”）。
+_deleted_until: dict[str, float] = {}
+_DELETED_TTL_S = 300.0
+
+
+def _is_deleted(key: str) -> bool:
+    """该账号 key 是否正处于删除墓碑窗口内。"""
+    return _deleted_until.get(key, 0) > time.time()
+
 
 def _is_takeover_active(key: str) -> bool:
     """该账号是否正处于人工接管窗口（开着远程桌面操作中）。"""
@@ -354,6 +364,8 @@ def _automation_busy() -> bool:
 
 def _enqueue_status(key: str) -> None:
     with _status_lock:
+        if _is_deleted(key):  # 刚删掉的账号不入队，防目录被重建
+            return
         if key in _status_pending:
             return
         _status_pending.add(key)
@@ -419,6 +431,11 @@ def _status_worker() -> None:
     while True:
         key = _status_queue.get()
         try:
+            # 账号已删除（墓碑窗口内）：丢弃队列任务，不给它再起实例
+            if _is_deleted(key):
+                with _status_lock:
+                    _status_pending.discard(key)
+                continue
             if "/" in key:
                 platform, profile = key.split("/", 1)
                 profile = None if profile == "默认" else profile
@@ -714,24 +731,70 @@ def api_profile():
 
 @app.post("/api/logout")
 def api_logout():
-    """删除账号登录态（删除浏览器目录）。"""
+    """彻底删除账号：停浏览器实例 + 删数据目录 + 清守护端口映射。
+
+    修复历史问题：旧实现仅本地 rmtree 目录，后台登录检测若正为该账号 ensure
+    Chromium（或删除瞬间被入队），目录会被重建/残留残缺目录 → “删了又出现”；
+    且守护的持久化端口映射未清理，list_browsers 持续列出幽灵账号。
+    现在先置墓碑挡住检测队列，再交由守护彻底删除（停实例→清映射→删目录）。
+    """
     data = request.get_json(silent=True) or {}
     platform = data.get("platform", "")
     profile = data.get("profile") or None
     if profile == "默认":
         profile = None
-    dir_path = _browsers_dir / (f"{platform}__{profile}" if profile else platform)
+    account = f"{platform}__{profile}" if profile else platform
     key = _account_key(platform, profile)
-    _status_cache.pop(key, None)
-    _takeover_until.pop(key, None)
     with _status_lock:
+        _deleted_until[key] = time.time() + _DELETED_TTL_S   # 墓碑：挡后续入队/队列任务
+        _status_cache.pop(key, None)
         _status_pending.discard(key)
-    if dir_path.exists():
+        _status_recent.pop(_browser_account(platform, profile), None)
+        _force_check.discard(key)
+    _takeover_until.pop(key, None)
+
+    stopped = removed_map = False
+    dir_removed = False
+    # 1) 首选走守护彻底删除（容器化部署），它在杀完进程后才删目录，不会边删边写
+    if _settings.browser_mgr_url:
+        try:
+            from .skills.uploader.browser import BrowserManagerClient
+
+            info = asyncio.run(
+                BrowserManagerClient(_settings.browser_mgr_url).delete_account(account)
+            )
+            stopped = bool(info.get("stopped"))
+            removed_map = bool(info.get("removed_map"))
+            dir_removed = not info.get("dir_exists")
+            log.info("已删除账号 [%s]（守护）：实例=%s 映射清理=%s 目录已删=%s",
+                     account, stopped, removed_map, dir_removed)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("守护删除账号 [%s] 失败，回退本地目录删除: %s", account, exc)
+    # 2) 兜底：本地直连模式 / 守护调用失败时直接清目录
+    if not dir_removed:
         import shutil
 
-        shutil.rmtree(dir_path, ignore_errors=True)
-        return jsonify({"ok": True, "message": f"已删除 {platform}/{profile or '默认'} 的登录态"})
-    return jsonify({"ok": False, "message": "目录不存在"}), 404
+        dir_path = _browsers_dir / account
+        for _attempt in range(3):
+            try:
+                if dir_path.exists():
+                    shutil.rmtree(dir_path)
+                dir_removed = not dir_path.exists()
+                break
+            except Exception as exc:  # noqa: BLE001
+                log.warning("本地删除目录 [%s] 第 %d 次失败: %s", account, _attempt + 1, exc)
+                time.sleep(1.0)
+    if dir_removed:
+        return jsonify({
+            "ok": True,
+            "message": f"已删除 {platform}/{profile or '默认'} 的账号",
+            "stopped": stopped, "mapping_removed": removed_map,
+        })
+    return jsonify({
+        "ok": False,
+        "message": f"删除 {platform}/{profile or '默认'} 失败：数据目录仍被占用（请稍后重试或重启服务）",
+        "stopped": stopped, "mapping_removed": removed_map,
+    }), 409
 
 
 @app.post("/api/accounts/refresh")

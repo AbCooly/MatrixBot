@@ -297,9 +297,23 @@ class BrowserManagerClient:
             return []
         return resp.json().get("browsers", [])
 
-    async def stop_browser(self, account: str) -> None:
-        """关闭某账号浏览器实例（登录态目录保留，下次 ensure 会以同端口重启）。"""
+    async def _delete(self, url: str, account: str) -> dict:
+        """DELETE 请求（兼容旧版 httpx：client.delete 可能不支持 json 参数）。"""
         import httpx
 
         async with httpx.AsyncClient(timeout=self._timeout, headers=self._headers()) as client:
-            await client.delete(f"{self._base}/browser", json={"account": account})
+            resp = await client.request("DELETE", url, json={"account": account})
+            resp.raise_for_status()
+            return resp.json()
+
+    async def stop_browser(self, account: str) -> None:
+        """关闭某账号浏览器实例（登录态目录保留，下次 ensure 会以同端口重启）。"""
+        await self._delete(f"{self._base}/browser", account)
+
+    async def delete_account(self, account: str) -> dict:
+        """彻底删除账号：停实例 + 清持久化端口映射 + 删除登录态目录。
+
+        返回 {"account","stopped","removed_map","dir_exists"}。用于 WebUI
+        「删除账号」，删除后守护 list_browsers 与目录扫描都不再出现该账号。
+        """
+        return await self._delete(f"{self._base}/profile", account)

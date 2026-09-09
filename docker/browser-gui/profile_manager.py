@@ -386,6 +386,73 @@ def stop_browser(account: str) -> bool:
         return existed
 
 
+def delete_account(account: str) -> dict:
+    """彻底删除账号：关闭实例 → 清内存状态 → 移除持久化端口映射 → 删除数据目录。
+
+    与 stop_browser 的区别：stop_browser 保留登录态目录（下次 ensure 自动恢复）；
+    本函数把数据目录与端口映射一并清除——WebUI「删除账号」后不应再被
+    list_browsers / 目录扫描发现（修复“删了又被扫出来”的幽灵账号问题）。
+    """
+    import shutil
+    with _account_lock(account):
+        port = _port_for(account)
+        was_alive = _alive(account) or _cdp_ready(port, timeout=1.0)
+        # 1) 终止进程并等待真正退出，避免 Chromium 边删边写把目录“复活”
+        proc = _procs.pop(account, None)
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.terminate()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                proc.wait(timeout=3)
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            subprocess.run(
+                ["pkill", "-f", f"--remote-debugging-port={port}"],
+                capture_output=True, timeout=5,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        for _ in range(10):  # 等 CDP 端口完全释放（最长 ~5s）
+            if not _cdp_ready(port, timeout=0.5):
+                break
+            time.sleep(0.5)
+        _started_at.pop(account, None)
+        _last_used.pop(account, None)
+        _pinned.pop(account, None)
+    # 2) 移除持久化端口映射（否则 list_browsers 一直列出幽灵账号）
+    removed_map = False
+    with _lock:
+        ports = _load_ports()
+        if account in ports:
+            ports.pop(account, None)
+            _save_ports(ports)
+            removed_map = True
+            log("删除账号 [%s]：已移除持久化端口映射", account)
+    # 3) 删除数据目录（多次重试，确保无进程占用）
+    datadir = DATA_ROOT / account
+    for attempt in range(5):
+        if not datadir.exists():
+            break
+        try:
+            shutil.rmtree(datadir)
+            log("删除账号 [%s]：数据目录已清除", account)
+            break
+        except Exception as exc:  # noqa: BLE001
+            log("删除账号 [%s]：目录清除第 %d 次失败: %s", account, attempt + 1, exc)
+            time.sleep(1.0)
+    log("已彻底删除账号 [%s]（实例曾存活=%s，目录残留=%s）",
+        account, was_alive, datadir.exists())
+    return {
+        "account": account,
+        "stopped": bool(was_alive),
+        "removed_map": removed_map,
+        "dir_exists": datadir.exists(),
+    }
+
+
 def list_browsers() -> list[dict]:
     out = []
     with _lock:
@@ -640,15 +707,27 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authorized():
             _respond(self, 401, {"ok": False, "message": "guardian token 缺失或不正确"})
             return
-        if path != "/browser":
+        if path == "/browser":
+            data = _body(self)
+            account = str(data.get("account", "")).strip()
+            if not _valid_account(account):
+                _respond(self, 400, {"error": f"非法账号名: {account!r}"})
+                return
+            _respond(self, 200, {"account": account, "stopped": stop_browser(account)})
+        elif path == "/profile":
+            # 彻底删除账号（停实例 + 清端口映射 + 删数据目录），WebUI「删除账号」调用
+            data = _body(self)
+            account = str(data.get("account", "")).strip()
+            if not _valid_account(account):
+                _respond(self, 400, {"error": f"非法账号名: {account!r}"})
+                return
+            try:
+                _respond(self, 200, delete_account(account))
+            except Exception as exc:  # noqa: BLE001
+                log("删除账号失败 [%s]: %s", account, exc)
+                _respond(self, 500, {"error": str(exc)})
+        else:
             _respond(self, 404, {"error": "not found"})
-            return
-        data = _body(self)
-        account = str(data.get("account", "")).strip()
-        if not _valid_account(account):
-            _respond(self, 400, {"error": f"非法账号名: {account!r}"})
-            return
-        _respond(self, 200, {"account": account, "stopped": stop_browser(account)})
 
 
 def main() -> int:
